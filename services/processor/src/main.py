@@ -10,6 +10,7 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
 import structlog
@@ -24,8 +25,16 @@ from .alerter import (
     update_server_state,
 )
 from .consumer import create_consumer, parse_timestamp
+from .drain import cluster_logs
+from .log_consumer import process_logs
 from .rules import SlidingWindowEvaluator
-from .storage import close_storage, create_incident, init_storage, write_metric
+from .storage import (
+    close_storage,
+    create_incident,
+    fetch_log_snapshot,
+    init_storage,
+    write_metric,
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -85,6 +94,13 @@ async def process_metrics() -> None:
                     if not in_cooldown:
                         incident_id = str(uuid.uuid4())
 
+                        # Eager log snapshot: capture surrounding WARN/ERROR/FATAL
+                        # logs into the incident row before the SSE fire-out.
+                        log_context = await _build_log_context(
+                            server_id=alert.server_id,
+                            anchor=timestamp,
+                        )
+
                         # Create incident in DB
                         await create_incident(
                             incident_id=incident_id,
@@ -94,6 +110,7 @@ async def process_metrics() -> None:
                             current_value=alert.current_value,
                             threshold=alert.threshold,
                             message=alert.message,
+                            log_context=log_context,
                         )
 
                         # Publish to Redis pub/sub
@@ -117,30 +134,58 @@ async def process_metrics() -> None:
         log.info("processor.loop.stopped")
 
 
+async def _build_log_context(server_id: str, anchor: datetime) -> dict[str, object] | None:
+    """
+    Capture the WARN/ERROR/FATAL log slice around an incident's anchor time,
+    cluster it via drain, and return a JSON-serializable summary. None if
+    no logs were found or if the snapshot itself failed (incident creation
+    must not depend on logs being available).
+    """
+    try:
+        start = anchor - timedelta(seconds=60)
+        end = anchor + timedelta(seconds=30)
+        lines = await fetch_log_snapshot(server_id, start, end)
+        if not lines:
+            return None
+        clusters = cluster_logs(lines)
+        return {
+            "window_start": start.astimezone(timezone.utc).isoformat(),
+            "window_end": end.astimezone(timezone.utc).isoformat(),
+            "total_lines": len(lines),
+            "templates": clusters,
+        }
+    except Exception as exc:
+        log.warning("processor.log_context.failed", server_id=server_id, error=str(exc))
+        return None
+
+
 # ---------------------------------------------------------------------------
 # FastAPI app (for health endpoint)
 # ---------------------------------------------------------------------------
 _processing_task: asyncio.Task[None] | None = None
+_log_task: asyncio.Task[None] | None = None
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Start/stop the processor and its dependencies."""
-    global _processing_task
+    global _processing_task, _log_task
 
     log.info("processor.starting")
 
     _processing_task = asyncio.create_task(process_metrics())
+    _log_task = asyncio.create_task(process_logs())
 
     yield
 
     log.info("processor.stopping")
-    if _processing_task is not None:
-        _processing_task.cancel()
-        try:
-            await _processing_task
-        except asyncio.CancelledError:
-            pass
+    for task in (_processing_task, _log_task):
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     await close_alerter()
     await close_storage()

@@ -2,6 +2,7 @@
 Sentinel API Service — GraphQL Mutations
 """
 
+import json
 from datetime import datetime, timezone
 
 import strawberry
@@ -127,7 +128,7 @@ class Mutation:
                     cached=True,
                 )
 
-            # Generate analysis
+            # Generate analysis (passes pre-captured log_context for richer prompt)
             analysis = await analyze_incident(
                 incident_id=id,
                 server_id=inc.server_id,
@@ -136,6 +137,7 @@ class Mutation:
                 current_value=inc.current_value,
                 threshold=inc.threshold,
                 message=inc.message,
+                log_context=inc.log_context,
             )
 
             # Store on the incident record
@@ -185,4 +187,5 @@ async def _to_incident_type(inc: Incident, session: object) -> IncidentType:
         created_at=inc.created_at,
         acknowledged_at=inc.acknowledged_at,
         resolved_at=inc.resolved_at,
+        log_context=json.dumps(inc.log_context) if inc.log_context else None,
     )

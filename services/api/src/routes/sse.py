@@ -102,3 +102,79 @@ async def sse_events(request: Request, token: str = "") -> EventSourceResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+async def _log_tail_generator(
+    request: Request,
+    user_id: str,
+    server_id: str | None,
+) -> AsyncGenerator[dict[str, str], None]:
+    """Stream live logs from Redis `logs.live.<server_id>` (or `logs.live.*`)."""
+    redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+    pubsub = redis_client.pubsub()
+
+    pattern = f"logs.live.{server_id}" if server_id else "logs.live.*"
+    try:
+        await pubsub.psubscribe(pattern)
+        log.info("sse.log_tail.connected", user_id=user_id, pattern=pattern)
+
+        yield {"event": "connected", "data": json.dumps({"status": "connected", "pattern": pattern})}
+
+        while True:
+            if await request.is_disconnected():
+                log.info("sse.log_tail.disconnected", user_id=user_id)
+                break
+
+            message = await pubsub.get_message(
+                ignore_subscribe_messages=True,
+                timeout=1.0,
+            )
+
+            if message is not None and message["type"] == "pmessage":
+                yield {"event": "log", "data": message["data"]}
+            else:
+                yield {"event": "keepalive", "data": ""}
+                await asyncio.sleep(1)
+
+    except asyncio.CancelledError:
+        log.info("sse.log_tail.cancelled", user_id=user_id)
+    finally:
+        await pubsub.punsubscribe(pattern)
+        await pubsub.aclose()
+        await redis_client.aclose()
+        log.info("sse.log_tail.cleanup", user_id=user_id)
+
+
+@router.get("/api/logs/tail")
+async def sse_log_tail(
+    request: Request,
+    token: str = "",
+    server_id: str = "",
+) -> EventSourceResponse:
+    """
+    SSE endpoint streaming live log lines.
+    Omit `server_id` to tail all servers (uses Redis pattern subscribe).
+    """
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token is required",
+        )
+
+    payload = verify_access_token(token)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+
+    user_id = payload["sub"]
+    sid = server_id.strip() or None
+
+    return EventSourceResponse(
+        _log_tail_generator(request, user_id, sid),
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

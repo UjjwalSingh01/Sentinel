@@ -68,3 +68,60 @@ export function disconnectSSE(): void {
 export function isSSEConnected(): boolean {
   return eventSource !== null && eventSource.readyState === EventSource.OPEN;
 }
+
+// ---------------------------------------------------------------------------
+// Log tail
+// ---------------------------------------------------------------------------
+
+export interface LogRecord {
+  time?: string;
+  timestamp?: string;
+  server_id: string;
+  service?: string | null;
+  level: string;
+  message: string;
+  fields?: Record<string, unknown> | null;
+  trace_id?: string | null;
+}
+
+interface LogTailHandlers {
+  onLog: (record: LogRecord) => void;
+  onConnected?: () => void;
+  onError?: (error: Event) => void;
+}
+
+export function connectLogTail(serverId: string | null, handlers: LogTailHandlers): () => void {
+  const token = localStorage.getItem('sentinel_access_token');
+  if (!token) {
+    console.error('[SSE] No access token available for log tail');
+    return () => {};
+  }
+
+  const params = new URLSearchParams({ token });
+  if (serverId) params.set('server_id', serverId);
+  const url = `/api/logs/tail?${params.toString()}`;
+  const es = new EventSource(url);
+
+  es.addEventListener('connected', () => {
+    console.info('[SSE] Log tail established', serverId ?? 'all');
+    handlers.onConnected?.();
+  });
+
+  es.addEventListener('log', (event: MessageEvent) => {
+    try {
+      const data = JSON.parse(event.data) as LogRecord;
+      handlers.onLog(data);
+    } catch (err) {
+      console.error('[SSE] Failed to parse log event', err);
+    }
+  });
+
+  es.onerror = (error: Event) => {
+    console.error('[SSE] Log tail error', error);
+    handlers.onError?.(error);
+  };
+
+  return () => {
+    es.close();
+  };
+}

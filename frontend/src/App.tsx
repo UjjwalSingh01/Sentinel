@@ -8,6 +8,7 @@ import { LoginPage } from '@/pages/LoginPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { ServerDetailPage } from '@/pages/ServerDetailPage';
 import { IncidentsPage } from '@/pages/IncidentsPage';
+import { LogsPage } from '@/pages/LogsPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated()) {
@@ -32,6 +33,7 @@ export default function App() {
             <Route path="/" element={<DashboardPage />} />
             <Route path="/server/:serverId" element={<ServerDetailPage />} />
             <Route path="/incidents" element={<IncidentsPage />} />
+            <Route path="/logs" element={<LogsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -1,0 +1,6 @@
+# Sentinel — Log Ingestion Service
+fastapi>=0.111,<1.0
+uvicorn[standard]>=0.29,<1.0
+aiokafka>=0.10,<1.0
+pydantic>=2.7,<3.0
+structlog>=24.1,<25.0

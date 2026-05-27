@@ -45,6 +45,7 @@ export const GET_INCIDENTS = gql`
       createdAt
       acknowledgedAt
       resolvedAt
+      logContext
     }
   }
 `;
@@ -70,6 +71,7 @@ export const GET_INCIDENT = gql`
       createdAt
       acknowledgedAt
       resolvedAt
+      logContext
     }
   }
 `;

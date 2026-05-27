@@ -59,6 +59,9 @@ class IncidentType:
     created_at: datetime
     acknowledged_at: Optional[datetime] = None
     resolved_at: Optional[datetime] = None
+    # JSON-encoded snapshot of correlated logs at incident time.
+    # Frontend parses via JSON.parse(). null when no logs were captured.
+    log_context: Optional[str] = None
 
 
 @strawberry.type
@@ -68,3 +71,26 @@ class AiAnalysisType:
     incident_id: str
     analysis: str
     cached: bool
+
+
+@strawberry.type
+class LogType:
+    """A single log line stored in the logs hypertable."""
+
+    time: datetime
+    server_id: str
+    service: Optional[str] = None
+    level: str
+    message: str
+    # JSON-encoded structured fields; null if none.
+    fields: Optional[str] = None
+    trace_id: Optional[str] = None
+
+
+@strawberry.type
+class LogConnection:
+    """Paginated logs result."""
+
+    items: list[LogType]
+    next_cursor: Optional[str] = None
+    has_more: bool

@@ -8,10 +8,13 @@ from typing import Optional
 import strawberry
 import structlog
 
+import json
+import base64
+
 from ..db.database import async_session, get_raw_pool
 from ..db.models import Incident, User
 from ..services.redis_service import get_all_server_states
-from .types import IncidentType, MetricPointType, ServerType, UserType
+from .types import IncidentType, LogConnection, LogType, MetricPointType, ServerType, UserType
 
 from sqlalchemy import select
 
@@ -137,6 +140,7 @@ class Query:
                         created_at=inc.created_at,
                         acknowledged_at=inc.acknowledged_at,
                         resolved_at=inc.resolved_at,
+                        log_context=json.dumps(inc.log_context) if inc.log_context else None,
                     )
                 )
 
@@ -183,6 +187,7 @@ class Query:
                 created_at=inc.created_at,
                 acknowledged_at=inc.acknowledged_at,
                 resolved_at=inc.resolved_at,
+                log_context=json.dumps(inc.log_context) if inc.log_context else None,
             )
 
     @strawberry.field
@@ -201,3 +206,96 @@ class Query:
                 )
                 for u in users
             ]
+
+    @strawberry.field
+    async def logs(
+        self,
+        server_id: Optional[str] = None,
+        service: Optional[str] = None,
+        levels: Optional[list[str]] = None,
+        from_time: Optional[datetime] = None,
+        to_time: Optional[datetime] = None,
+        query: Optional[str] = None,
+        cursor: Optional[str] = None,
+        limit: int = 100,
+    ) -> LogConnection:
+        """
+        Paginated logs query.
+
+        - `query` is full-text matched against `search_vec` (websearch syntax).
+        - `cursor` is an opaque base64 of the last item's ISO time; pass back
+          to fetch the next older page (results are newest-first).
+        """
+        limit = max(1, min(limit, 500))
+        if from_time is None:
+            from_time = datetime.now(timezone.utc) - timedelta(hours=1)
+        if to_time is None:
+            to_time = datetime.now(timezone.utc)
+
+        # Cursor decoding: ISO timestamp of the last item from the previous page
+        cursor_time: Optional[datetime] = None
+        if cursor:
+            try:
+                cursor_time = datetime.fromisoformat(
+                    base64.urlsafe_b64decode(cursor.encode()).decode()
+                )
+            except Exception:
+                cursor_time = None
+
+        where: list[str] = ["time >= $1", "time <= $2"]
+        params: list[object] = [from_time, to_time]
+
+        if server_id:
+            params.append(server_id)
+            where.append(f"server_id = ${len(params)}")
+        if service:
+            params.append(service)
+            where.append(f"service = ${len(params)}")
+        if levels:
+            params.append([lv.upper() for lv in levels])
+            where.append(f"level = ANY(${len(params)}::text[])")
+        if query:
+            params.append(query)
+            where.append(f"search_vec @@ websearch_to_tsquery('english', ${len(params)})")
+        if cursor_time is not None:
+            params.append(cursor_time)
+            where.append(f"time < ${len(params)}")
+
+        # Fetch one extra row to detect has_more
+        params.append(limit + 1)
+        sql = f"""
+            SELECT time, server_id, service, level, message, fields, trace_id
+            FROM logs
+            WHERE {" AND ".join(where)}
+            ORDER BY time DESC
+            LIMIT ${len(params)}
+        """
+
+        pool = await get_raw_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+
+        has_more = len(rows) > limit
+        page_rows = rows[:limit]
+
+        items = [
+            LogType(
+                time=r["time"],
+                server_id=r["server_id"],
+                service=r["service"],
+                level=r["level"],
+                message=r["message"],
+                fields=r["fields"] if r["fields"] is None else json.dumps(
+                    json.loads(r["fields"]) if isinstance(r["fields"], str) else r["fields"]
+                ),
+                trace_id=r["trace_id"],
+            )
+            for r in page_rows
+        ]
+
+        next_cursor: Optional[str] = None
+        if has_more and page_rows:
+            last_time = page_rows[-1]["time"].isoformat()
+            next_cursor = base64.urlsafe_b64encode(last_time.encode()).decode()
+
+        return LogConnection(items=items, next_cursor=next_cursor, has_more=has_more)

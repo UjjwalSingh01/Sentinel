@@ -3,8 +3,10 @@ Sentinel API Service — SQLAlchemy Models
 """
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import DateTime, Float, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -47,4 +49,7 @@ class Incident(Base):
     )
     resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    log_context: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
     )

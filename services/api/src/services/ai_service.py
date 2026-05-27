@@ -7,6 +7,7 @@ Results are cached in Redis for performance.
 
 import json
 from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
 
 import structlog
 
@@ -44,10 +45,14 @@ async def analyze_incident(
     current_value: float,
     threshold: float,
     message: str,
+    log_context: Optional[dict[str, Any]] = None,
 ) -> str:
     """
     Generate an AI-powered root-cause analysis for an incident.
     Returns the analysis text, or an error message if AI is unavailable.
+
+    `log_context` is the eager log snapshot captured at incident creation
+    (see services/processor/src/main.py:_build_log_context).
     """
     # Check cache first
     cached = await get_ai_cache(incident_id)
@@ -59,10 +64,9 @@ async def analyze_incident(
         return "AI analysis is not available. The Gemini API key has not been configured."
 
     try:
-        # Fetch recent metrics for context
         metrics_context = await _get_recent_metrics(server_id)
+        logs_context = _format_log_context(log_context)
 
-        # Build the prompt
         prompt = _build_prompt(
             server_id=server_id,
             metric_type=metric_type,
@@ -71,23 +75,66 @@ async def analyze_incident(
             threshold=threshold,
             message=message,
             metrics_context=metrics_context,
+            logs_context=logs_context,
         )
 
-        # Call Gemini
         import google.generativeai as genai  # type: ignore[import-untyped]
         model = genai.GenerativeModel("gemini-2.0-flash")
         response = model.generate_content(prompt)
         analysis = response.text
 
-        # Cache the result
         await set_ai_cache(incident_id, analysis, ttl=900)
 
-        log.info("ai.analysis.generated", incident_id=incident_id)
+        log.info(
+            "ai.analysis.generated",
+            incident_id=incident_id,
+            has_log_context=log_context is not None,
+        )
         return analysis
 
     except Exception as exc:
         log.error("ai.analysis.failed", incident_id=incident_id, error=str(exc))
         return f"AI analysis failed: {str(exc)}. Please try again later."
+
+
+def _format_log_context(log_context: Optional[dict[str, Any]]) -> str:
+    """
+    Render the pre-captured log_context into a token-budgeted prompt section.
+    Keeps the top-N templates + a few sample lines each; hard caps at ~3.5k chars.
+    """
+    if not log_context:
+        return "No log evidence was captured for this incident."
+
+    templates = log_context.get("templates") or []
+    total_lines = log_context.get("total_lines", 0)
+    window_start = log_context.get("window_start", "")
+    window_end = log_context.get("window_end", "")
+
+    if not templates:
+        return f"Log window {window_start} → {window_end}: 0 WARN/ERROR/FATAL lines."
+
+    out: list[str] = [
+        f"Captured {total_lines} WARN/ERROR/FATAL lines between {window_start} and {window_end}.",
+        "Top patterns (count × normalized template):",
+    ]
+    budget = 3500
+    used = sum(len(line) for line in out)
+    samples_per_template = 2
+
+    for t in templates[:10]:
+        header = f"  [x{t.get('count', 0)} {t.get('level', '?')}] {t.get('template', '')}"
+        if used + len(header) > budget:
+            break
+        out.append(header)
+        used += len(header)
+        for sample in (t.get("samples") or [])[:samples_per_template]:
+            line = f"      e.g. {sample}"
+            if used + len(line) > budget:
+                break
+            out.append(line)
+            used += len(line)
+
+    return "\n".join(out)
 
 
 async def _get_recent_metrics(server_id: str) -> str:
@@ -133,6 +180,7 @@ def _build_prompt(
     threshold: float,
     message: str,
     metrics_context: str,
+    logs_context: str,
 ) -> str:
     """Build a structured prompt for Gemini root-cause analysis."""
     return f"""You are an expert Site Reliability Engineer analyzing an infrastructure incident.
@@ -148,18 +196,28 @@ INCIDENT DETAILS:
 RECENT METRICS (last 5 minutes, newest first):
 {metrics_context}
 
+LOG EVIDENCE (correlated WARN/ERROR/FATAL lines around the incident window,
+deduped to templates with occurrence counts):
+{logs_context}
+
 Please provide:
 
 1. PROBABLE ROOT CAUSE
-   Analyze the metric pattern and provide the most likely root cause(s) for this alert. Consider common infrastructure failure modes.
+   Analyze the metric pattern AND the log evidence together. Cite specific log
+   templates by name when they support a hypothesis. If the logs and metrics
+   point at different things, say so.
 
 2. IMPACT ASSESSMENT
    What is the likely impact on the system and end users?
 
 3. INVESTIGATION STEPS
-   Provide 4-6 specific, actionable steps the on-call engineer should take to investigate and diagnose this issue. Include specific commands or queries where applicable.
+   Provide 4-6 specific, actionable steps the on-call engineer should take
+   to investigate and diagnose this issue. Include specific commands or
+   queries where applicable.
 
 4. RECOMMENDED REMEDIATION
-   Suggest immediate actions to resolve or mitigate the issue, as well as longer-term preventive measures.
+   Suggest immediate actions to resolve or mitigate the issue, as well as
+   longer-term preventive measures.
 
-Format your response in clean markdown with clear section headers. Be concise but thorough. Do not use emojis."""
+Format your response in clean markdown with clear section headers. Be concise
+but thorough. Do not use emojis."""

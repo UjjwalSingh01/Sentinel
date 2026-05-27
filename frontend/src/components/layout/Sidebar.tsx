@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, AlertTriangle, LogOut, Shield, Activity } from 'lucide-react';
+import { LayoutDashboard, AlertTriangle, LogOut, Shield, Activity, Terminal } from 'lucide-react';
 import { logout, getUser } from '@/lib/auth';
 
 export function Sidebar() {
@@ -14,6 +14,7 @@ export function Sidebar() {
   const navItems = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard },
     { to: '/incidents', label: 'Incidents', icon: AlertTriangle },
+    { to: '/logs', label: 'Logs', icon: Terminal },
   ];
 
   return (

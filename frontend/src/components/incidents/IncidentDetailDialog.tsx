@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery } from '@apollo/client/react';
 import {
   X,
@@ -10,6 +11,8 @@ import {
   Sparkles,
   Loader2,
   Server,
+  Terminal,
+  ExternalLink,
 } from 'lucide-react';
 import { ACKNOWLEDGE_INCIDENT, RESOLVE_INCIDENT, ASSIGN_INCIDENT, REQUEST_AI_ANALYSIS } from '@/graphql/mutations';
 import { GET_INCIDENT, GET_USERS } from '@/graphql/queries';
@@ -34,10 +37,31 @@ export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDial
   const [assignIncident] = useMutation(ASSIGN_INCIDENT);
   const [requestAiAnalysis] = useMutation(REQUEST_AI_ANALYSIS);
 
-  if (!incidentId) return null;
-
   const incident = (incidentData as any)?.incident;
   const users = (usersData as any)?.users || [];
+
+  // log_context is a JSON string from the API; parse defensively.
+  // Hook must run unconditionally — keep it above any early return.
+  const logContext = useMemo(() => {
+    if (!incident?.logContext) return null;
+    try {
+      return JSON.parse(incident.logContext) as {
+        window_start?: string;
+        window_end?: string;
+        total_lines?: number;
+        templates?: Array<{
+          template: string;
+          count: number;
+          level: string;
+          samples?: string[];
+        }>;
+      };
+    } catch {
+      return null;
+    }
+  }, [incident?.logContext]);
+
+  if (!incidentId) return null;
 
   const handleAcknowledge = async () => {
     await acknowledgeIncident({ variables: { id: incidentId } });
@@ -198,6 +222,62 @@ export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDial
                   </option>
                 ))}
               </select>
+            </div>
+
+            {/* Correlated logs */}
+            <div className="bg-zinc-900 rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Terminal size={14} className="text-emerald-400" />
+                  <span className="text-sm font-semibold">Correlated Logs</span>
+                  {logContext?.total_lines !== undefined && (
+                    <span className="text-[11px] text-muted-foreground">
+                      ({logContext.total_lines} WARN/ERROR/FATAL captured)
+                    </span>
+                  )}
+                </div>
+                <Link
+                  to={`/logs?serverId=${encodeURIComponent(incident.serverId)}`}
+                  className="text-[11px] text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1"
+                >
+                  Open in Logs <ExternalLink size={11} />
+                </Link>
+              </div>
+              {logContext && logContext.templates && logContext.templates.length > 0 ? (
+                <div className="space-y-1.5">
+                  {logContext.templates.slice(0, 8).map((t, i) => (
+                    <div key={i} className="bg-zinc-800/60 rounded p-2 font-mono text-[11px]">
+                      <div className="flex items-start gap-2">
+                        <span
+                          className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            t.level === 'FATAL' || t.level === 'ERROR'
+                              ? 'bg-red-500/20 text-red-400'
+                              : t.level === 'WARN' || t.level === 'WARNING'
+                              ? 'bg-amber-500/20 text-amber-400'
+                              : 'bg-zinc-700 text-zinc-300'
+                          }`}
+                        >
+                          ×{t.count} {t.level}
+                        </span>
+                        <span className="text-foreground/80 break-all">{t.template}</span>
+                      </div>
+                      {t.samples && t.samples.length > 0 && (
+                        <div className="mt-1 ml-2 text-muted-foreground">
+                          {t.samples.slice(0, 2).map((s, j) => (
+                            <div key={j} className="truncate" title={s}>
+                              e.g. {s}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground italic">
+                  No log evidence was captured for this incident.
+                </p>
+              )}
             </div>
 
             {/* AI Analysis */}

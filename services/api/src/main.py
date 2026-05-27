@@ -149,6 +149,46 @@ async def _ensure_schema() -> None:
             ON metrics (server_id, time DESC);
         """)
 
+        # Log pipeline schema (mirrors services/processor/src/storage.py)
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS log_context JSONB;
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS logs (
+                time        TIMESTAMPTZ NOT NULL,
+                server_id   TEXT NOT NULL,
+                service     TEXT,
+                level       TEXT NOT NULL,
+                message     TEXT NOT NULL,
+                fields      JSONB,
+                trace_id    TEXT,
+                search_vec  TSVECTOR
+            );
+        """)
+
+        await conn.execute("""
+            SELECT create_hypertable('logs', 'time', if_not_exists => TRUE, chunk_time_interval => INTERVAL '1 hour');
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_logs_server_id_time
+            ON logs (server_id, time DESC);
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_logs_level_time
+            ON logs (level, time DESC);
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_logs_search
+            ON logs USING GIN (search_vec);
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_logs_fields
+            ON logs USING GIN (fields);
+        """)
+
     log.info("schema.ensured")
 
 

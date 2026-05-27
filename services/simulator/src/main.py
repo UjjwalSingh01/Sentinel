@@ -40,6 +40,8 @@ log: structlog.stdlib.BoundLogger = structlog.get_logger()
 # ---------------------------------------------------------------------------
 INGESTION_URL: Final[str] = os.getenv("INGESTION_URL", "http://ingestion:8001")
 INGEST_ENDPOINT: Final[str] = f"{INGESTION_URL}/api/ingest"
+LOG_INGESTION_URL: Final[str] = os.getenv("LOG_INGESTION_URL", "http://log-ingestion:8003")
+LOG_INGEST_ENDPOINT: Final[str] = f"{LOG_INGESTION_URL}/api/logs"
 INTERVAL_SECONDS: Final[float] = 3.0
 SPIKE_PROBABILITY: Final[float] = 0.15  # 15% chance per tick per server to START a spike
 
@@ -124,6 +126,74 @@ class ServerSimulator:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
+    def generate_logs(self) -> list[dict[str, object]]:
+        """
+        Emit a small batch of correlated log lines per tick. During a spike,
+        emit louder ERROR/WARN traffic so the log pipeline can surface
+        incident context.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        records: list[dict[str, object]] = []
+        service_name = f"{self.role}-svc"
+
+        # Baseline: 1-2 INFO lines per tick
+        for _ in range(random.randint(1, 2)):
+            records.append({
+                "server_id": self.server_id,
+                "service": service_name,
+                "level": "INFO",
+                "message": _baseline_info_line(self.role),
+                "timestamp": now_iso,
+                "fields": {"request_id": _fake_request_id()},
+            })
+
+        # Occasional benign warnings (slow query, retry)
+        if random.random() < 0.1:
+            records.append({
+                "server_id": self.server_id,
+                "service": service_name,
+                "level": "WARN",
+                "message": random.choice([
+                    f"slow query: SELECT ... took {random.randint(800, 1500)}ms",
+                    "rate limit threshold approaching for client api_v2",
+                    f"connection pool at {random.randint(70, 85)}% capacity",
+                ]),
+                "timestamp": now_iso,
+                "fields": {"request_id": _fake_request_id()},
+            })
+
+        # Occasional user-caused noise (should NOT trigger §1.6 alerts)
+        if random.random() < 0.15:
+            records.append({
+                "server_id": self.server_id,
+                "service": service_name,
+                "level": "WARN",
+                "message": random.choice([
+                    "invalid credentials for user noreply@example.com",
+                    "HTTP 404 GET /favicon.ico",
+                    "HTTP 401 unauthorized request",
+                ]),
+                "timestamp": now_iso,
+                "fields": {"request_id": _fake_request_id()},
+            })
+
+        # Spike: emit a burst of ERROR lines correlated with the active spike
+        if self._active_spike is not None:
+            for _ in range(random.randint(3, 6)):
+                records.append({
+                    "server_id": self.server_id,
+                    "service": service_name,
+                    "level": "ERROR",
+                    "message": _spike_error_line(self._active_spike),
+                    "timestamp": now_iso,
+                    "fields": {
+                        "request_id": _fake_request_id(),
+                        "spike_kind": self._active_spike,
+                    },
+                })
+
+        return records
+
 
 async def run_simulator() -> None:
     """Main simulation loop."""
@@ -134,9 +204,15 @@ async def run_simulator() -> None:
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         while True:
             tasks: list[asyncio.Task[None]] = []
+            batched_logs: list[dict[str, object]] = []
+
             for sim in simulators:
                 metrics = sim.generate_metrics()
                 tasks.append(asyncio.create_task(_send_metrics(client, metrics)))
+                batched_logs.extend(sim.generate_logs())
+
+            if batched_logs:
+                tasks.append(asyncio.create_task(_send_logs(client, batched_logs)))
 
             await asyncio.gather(*tasks, return_exceptions=True)
             await asyncio.sleep(INTERVAL_SECONDS)
@@ -162,6 +238,89 @@ async def _send_metrics(client: httpx.AsyncClient, metrics: dict[str, object]) -
             )
     except httpx.RequestError as exc:
         log.error("metric.send_failed", server_id=metrics["server_id"], error=str(exc))
+
+
+async def _send_logs(client: httpx.AsyncClient, records: list[dict[str, object]]) -> None:
+    """Send a batch of log records to the log-ingestion service."""
+    try:
+        response = await client.post(LOG_INGEST_ENDPOINT, json={"records": records})
+        if response.status_code != 200:
+            log.warning(
+                "log.rejected",
+                status=response.status_code,
+                count=len(records),
+                body=response.text[:200],
+            )
+    except httpx.RequestError as exc:
+        log.error("log.send_failed", error=str(exc), count=len(records))
+
+
+# ---------------------------------------------------------------------------
+# Log content helpers
+# ---------------------------------------------------------------------------
+def _fake_request_id() -> str:
+    return "".join(random.choice("0123456789abcdef") for _ in range(8))
+
+
+_INFO_LINES_BY_ROLE: Final[dict[str, list[str]]] = {
+    "web": [
+        "GET /api/users handled in {dur}ms",
+        "POST /api/login handled in {dur}ms",
+        "static asset cache hit /assets/app.js",
+    ],
+    "api": [
+        "POST /v2/orders handled in {dur}ms",
+        "GET /v2/orders/{n} handled in {dur}ms",
+        "auth token validated for client api_v2",
+    ],
+    "worker": [
+        "job {n} completed in {dur}ms",
+        "queue depth {n}",
+        "consumed message offset {n}",
+    ],
+    "database": [
+        "vacuum analyze completed on table sessions",
+        "executed prepared statement pq_{n} in {dur}ms",
+        "checkpoint complete; flushed {n} buffers",
+    ],
+    "cache": [
+        "GET key user:{n} hit",
+        "SET key session:{n} expires {n}s",
+        "evicted {n} keys",
+    ],
+}
+
+
+def _baseline_info_line(role: str) -> str:
+    template = random.choice(_INFO_LINES_BY_ROLE.get(role, _INFO_LINES_BY_ROLE["web"]))
+    return template.format(
+        n=random.randint(10, 9999),
+        dur=random.randint(5, 120),
+    )
+
+
+def _spike_error_line(spike_kind: str) -> str:
+    """Generate ERROR lines that align with the metric spike kind."""
+    if spike_kind == "cpu":
+        return random.choice([
+            f"worker pool exhausted: {random.randint(40, 60)} pending tasks",
+            f"event loop lag detected: {random.randint(400, 900)}ms",
+            "thread pool queue full, dropping background tasks",
+        ])
+    if spike_kind == "memory":
+        return random.choice([
+            "OutOfMemoryError: heap exhausted while allocating buffer",
+            f"GC pause exceeded {random.randint(1000, 3000)}ms threshold",
+            "process killed by OOM-killer (signal 9)",
+        ])
+    if spike_kind == "latency":
+        ip = f"10.0.1.{random.randint(2, 50)}"
+        return random.choice([
+            f"upstream timed out (110: Connection timed out) talking to {ip}:5432",
+            f"connection refused: {ip}:5432",
+            f"slow downstream call: GET https://payments.internal/charge took {random.randint(2000, 5000)}ms",
+        ])
+    return "unexpected error condition"
 
 
 if __name__ == "__main__":
