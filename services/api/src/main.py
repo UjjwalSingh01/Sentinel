@@ -154,6 +154,29 @@ async def _ensure_schema() -> None:
             ALTER TABLE incidents
             ADD COLUMN IF NOT EXISTS log_context JSONB;
         """)
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS rule_id TEXT;
+        """)
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS rule_name TEXT;
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS alert_rules (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                type        TEXT NOT NULL,
+                severity    TEXT NOT NULL,
+                expression  JSONB NOT NULL,
+                enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+                runbook_url TEXT,
+                created_by  TEXT,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        """)
 
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS logs (

@@ -82,10 +82,34 @@ async def init_storage() -> None:
             );
         """)
 
-        # Add log_context column to incidents (idempotent)
+        # Add log_context + rule_id columns to incidents (idempotent)
         await conn.execute("""
             ALTER TABLE incidents
             ADD COLUMN IF NOT EXISTS log_context JSONB;
+        """)
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS rule_id TEXT;
+        """)
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS rule_name TEXT;
+        """)
+
+        # Alert rules table (Phase 2: DB-driven rule engine)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS alert_rules (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                type        TEXT NOT NULL,
+                severity    TEXT NOT NULL,
+                expression  JSONB NOT NULL,
+                enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+                runbook_url TEXT,
+                created_by  TEXT,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
         """)
 
         # Create logs hypertable for log pipeline
@@ -171,6 +195,8 @@ async def create_incident(
     threshold: float,
     message: str,
     log_context: Optional[dict[str, Any]] = None,
+    rule_id: Optional[str] = None,
+    rule_name: Optional[str] = None,
 ) -> None:
     """Create an incident record in PostgreSQL with optional pre-captured log context."""
     if _pool is None:
@@ -180,20 +206,154 @@ async def create_incident(
         await conn.execute(
             """
             INSERT INTO incidents
-                (id, server_id, metric_type, severity, current_value, threshold, message, status, log_context)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8::jsonb)
+                (id, server_id, metric_type, severity, current_value, threshold,
+                 message, status, log_context, rule_id, rule_name)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8::jsonb, $9, $10)
             ON CONFLICT (id) DO NOTHING
             """,
             incident_id, server_id, metric_type, severity, current_value, threshold, message,
             json.dumps(log_context) if log_context is not None else None,
+            rule_id, rule_name,
         )
     log.info(
         "storage.incident.created",
         incident_id=incident_id,
         server_id=server_id,
         severity=severity,
+        rule_id=rule_id,
         has_log_context=log_context is not None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Alert rule storage (Phase 2)
+# ---------------------------------------------------------------------------
+DEFAULT_RULES: list[dict[str, Any]] = [
+    {
+        "id": "rule-cpu-critical",
+        "name": "CPU critical (>90%)",
+        "type": "metric",
+        "severity": "critical",
+        "expression": {"type": "metric", "metric": "cpu", "op": ">", "value": 90.0, "window_s": 15},
+    },
+    {
+        "id": "rule-memory-critical",
+        "name": "Memory critical (>95%)",
+        "type": "metric",
+        "severity": "critical",
+        "expression": {"type": "metric", "metric": "memory", "op": ">", "value": 95.0, "window_s": 15},
+    },
+    {
+        "id": "rule-cpu-warning",
+        "name": "CPU warning (>80%)",
+        "type": "metric",
+        "severity": "warning",
+        "expression": {"type": "metric", "metric": "cpu", "op": ">", "value": 80.0, "window_s": 20},
+    },
+    {
+        "id": "rule-latency-warning",
+        "name": "Request latency warning (>800ms)",
+        "type": "metric",
+        "severity": "warning",
+        "expression": {"type": "metric", "metric": "latency_ms", "op": ">", "value": 800.0, "window_s": 10},
+    },
+    # §1.6: sustained WARN/ERROR/FATAL log rate, excluding user-caused noise
+    {
+        "id": "rule-log-error-rate",
+        "name": "Sustained error log rate",
+        "type": "log",
+        "severity": "warning",
+        "expression": {
+            "type": "log",
+            "levels": ["WARN", "WARNING", "ERROR", "FATAL"],
+            "window_s": 60,
+            "rate_per_min": 5,
+            "exclude_patterns": [
+                r"invalid credentials",
+                r"wrong password",
+                r"HTTP 4[0-9][0-9]",
+                r"unauthorized request",
+                r"forbidden",
+            ],
+        },
+    },
+    # §3.2: composite — CPU pressure AND high error rate
+    {
+        "id": "rule-composite-cpu-and-errors",
+        "name": "CPU pressure with errors",
+        "type": "composite",
+        "severity": "critical",
+        "expression": {
+            "type": "and",
+            "children": [
+                {"type": "metric", "metric": "cpu", "op": ">", "value": 80.0, "window_s": 15},
+                {
+                    "type": "log",
+                    "levels": ["ERROR", "FATAL"],
+                    "window_s": 60,
+                    "rate_per_min": 5,
+                    "exclude_patterns": [r"HTTP 4[0-9][0-9]"],
+                },
+            ],
+        },
+    },
+]
+
+
+async def load_alert_rules() -> list[dict[str, Any]]:
+    """Load all enabled rules from the alert_rules table as plain dicts."""
+    if _pool is None:
+        raise RuntimeError("Storage pool is not initialized")
+
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, name, type, severity, expression, enabled, runbook_url
+            FROM alert_rules
+            ORDER BY created_at ASC
+            """
+        )
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        expr = r["expression"]
+        if isinstance(expr, str):
+            expr = json.loads(expr)
+        out.append({
+            "id": r["id"],
+            "name": r["name"],
+            "type": r["type"],
+            "severity": r["severity"],
+            "expression": expr,
+            "enabled": r["enabled"],
+            "runbook_url": r["runbook_url"],
+        })
+    return out
+
+
+async def seed_default_rules() -> int:
+    """Insert DEFAULT_RULES into alert_rules if the table is empty. Returns rows inserted."""
+    if _pool is None:
+        raise RuntimeError("Storage pool is not initialized")
+
+    async with _pool.acquire() as conn:
+        existing = await conn.fetchval("SELECT COUNT(*) FROM alert_rules")
+        if existing and existing > 0:
+            log.info("storage.rules.seed_skipped", existing=existing)
+            return 0
+
+        for rule in DEFAULT_RULES:
+            await conn.execute(
+                """
+                INSERT INTO alert_rules (id, name, type, severity, expression, enabled, created_by)
+                VALUES ($1, $2, $3, $4, $5::jsonb, TRUE, 'system')
+                ON CONFLICT (id) DO NOTHING
+                """,
+                rule["id"], rule["name"], rule["type"], rule["severity"],
+                json.dumps(rule["expression"]),
+            )
+        log.info("storage.rules.seeded", count=len(DEFAULT_RULES))
+        return len(DEFAULT_RULES)
 
 
 async def write_log_batch(records: list[dict[str, Any]]) -> int:

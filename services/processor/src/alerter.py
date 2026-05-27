@@ -12,7 +12,7 @@ import redis.asyncio as aioredis
 import structlog
 
 from .config import ALERT_COOLDOWN_SECONDS, REDIS_URL, SERVER_STATE_TTL_SECONDS
-from .rules import FiredAlert
+from .rule_engine import FiredAlert
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger()
 
@@ -61,23 +61,23 @@ async def update_server_state(
     await _redis.expire(key, SERVER_STATE_TTL_SECONDS)
 
 
-async def check_cooldown(server_id: str, metric_type: str) -> bool:
+async def check_cooldown(server_id: str, cooldown_key: str) -> bool:
     """Check if an alert is in cooldown. Returns True if in cooldown."""
     if _redis is None:
         raise RuntimeError("Redis is not initialized")
 
-    key = f"alert:cooldown:{server_id}:{metric_type}"
+    key = f"alert:cooldown:{server_id}:{cooldown_key}"
     return await _redis.exists(key) > 0
 
 
-async def set_cooldown(server_id: str, metric_type: str) -> None:
+async def set_cooldown(server_id: str, cooldown_key: str) -> None:
     """Set a cooldown key to prevent alert storms."""
     if _redis is None:
         raise RuntimeError("Redis is not initialized")
 
-    key = f"alert:cooldown:{server_id}:{metric_type}"
+    key = f"alert:cooldown:{server_id}:{cooldown_key}"
     await _redis.setex(key, ALERT_COOLDOWN_SECONDS, "1")
-    log.debug("alerter.cooldown.set", server_id=server_id, metric_type=metric_type, ttl=ALERT_COOLDOWN_SECONDS)
+    log.debug("alerter.cooldown.set", server_id=server_id, cooldown_key=cooldown_key, ttl=ALERT_COOLDOWN_SECONDS)
 
 
 async def publish_alert(alert: FiredAlert, incident_id: str) -> None:
@@ -94,6 +94,8 @@ async def publish_alert(alert: FiredAlert, incident_id: str) -> None:
         "threshold": alert.threshold,
         "message": alert.message,
         "status": "open",
+        "rule_id": alert.rule_id,
+        "rule_name": alert.rule_name,
     })
 
     await _redis.publish("alerts", payload)
@@ -102,4 +104,5 @@ async def publish_alert(alert: FiredAlert, incident_id: str) -> None:
         incident_id=incident_id,
         server_id=alert.server_id,
         severity=alert.severity.value,
+        rule_id=alert.rule_id,
     )

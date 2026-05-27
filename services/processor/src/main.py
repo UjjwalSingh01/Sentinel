@@ -26,13 +26,15 @@ from .alerter import (
 )
 from .consumer import create_consumer, parse_timestamp
 from .drain import cluster_logs
-from .log_consumer import process_logs
-from .rules import SlidingWindowEvaluator
+from .log_consumer import process_logs, set_engine_ingest_hook
+from .rule_engine import AlertRule, RuleEngine, Severity
 from .storage import (
     close_storage,
     create_incident,
     fetch_log_snapshot,
     init_storage,
+    load_alert_rules,
+    seed_default_rules,
     write_metric,
 )
 
@@ -54,9 +56,37 @@ structlog.configure(
 log: structlog.stdlib.BoundLogger = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
-# Sliding window evaluator (in-memory)
+# DB-driven rule engine (Phase 2)
 # ---------------------------------------------------------------------------
-evaluator = SlidingWindowEvaluator(window_seconds=30.0)
+engine = RuleEngine()
+set_engine_ingest_hook(engine.ingest_log)
+
+
+def _rules_from_rows(rows: list[dict[str, object]]) -> list[AlertRule]:
+    out: list[AlertRule] = []
+    for r in rows:
+        try:
+            sev = Severity(r["severity"])
+        except ValueError:
+            log.warning("rule.invalid_severity", rule_id=r.get("id"), severity=r.get("severity"))
+            continue
+        out.append(AlertRule(
+            id=str(r["id"]),
+            name=str(r["name"]),
+            type=str(r["type"]),
+            severity=sev,
+            expression=r["expression"] if isinstance(r["expression"], dict) else dict(r["expression"]),
+            enabled=bool(r.get("enabled", True)),
+            runbook_url=r.get("runbook_url"),  # type: ignore[arg-type]
+        ))
+    return out
+
+
+async def _refresh_rules() -> None:
+    rows = await load_alert_rules()
+    rules = _rules_from_rows(rows)
+    engine.set_rules(rules)
+    log.info("processor.rules.loaded", count=len(rules))
 
 
 async def process_metrics() -> None:
@@ -64,6 +94,8 @@ async def process_metrics() -> None:
     # Initialize dependencies here (not in lifespan) so health endpoint can respond immediately
     await init_storage()
     await init_alerter()
+    await seed_default_rules()
+    await _refresh_rules()
     consumer = await create_consumer()
     log.info("processor.loop.started")
 
@@ -84,13 +116,15 @@ async def process_metrics() -> None:
                 # 2. Update Redis server state
                 await update_server_state(server_id, cpu, memory, disk, latency_ms)
 
-                # 3. Add to sliding window and evaluate rules
-                evaluator.add_metric(server_id, cpu, memory, disk, latency_ms)
-                fired_alerts = evaluator.evaluate(server_id)
+                # 3. Feed metric tick to engine and evaluate every active rule
+                engine.add_metric(server_id, cpu, memory, disk, latency_ms)
+                fired_alerts = engine.evaluate_server(server_id)
 
-                # 4. Process fired alerts
+                # 4. Process fired alerts (cooldowns keyed on rule_id so
+                # different rules on the same server don't suppress each other)
                 for alert in fired_alerts:
-                    in_cooldown = await check_cooldown(alert.server_id, alert.metric_type)
+                    cooldown_key = f"{alert.rule_id}:{alert.metric_type}"
+                    in_cooldown = await check_cooldown(alert.server_id, cooldown_key)
                     if not in_cooldown:
                         incident_id = str(uuid.uuid4())
 
@@ -111,13 +145,15 @@ async def process_metrics() -> None:
                             threshold=alert.threshold,
                             message=alert.message,
                             log_context=log_context,
+                            rule_id=alert.rule_id,
+                            rule_name=alert.rule_name,
                         )
 
                         # Publish to Redis pub/sub
                         await publish_alert(alert, incident_id)
 
                         # Set cooldown
-                        await set_cooldown(alert.server_id, alert.metric_type)
+                        await set_cooldown(alert.server_id, cooldown_key)
 
                 log.debug(
                     "metric.processed",

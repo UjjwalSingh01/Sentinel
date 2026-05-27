@@ -2,13 +2,14 @@
 Sentinel Stream Processor — Log Consumer
 
 Consumes log records from Redpanda, batches them, writes to the `logs`
-hypertable, and republishes each line to Redis `logs.live.<server_id>`
-for the SSE log tail.
+hypertable, republishes each line to Redis `logs.live.<server_id>` for
+the SSE log tail, and feeds each line into the rule engine so log-based
+and composite rules can fire (Phase 2).
 """
 
 import asyncio
 import json
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from aiokafka import AIOKafkaConsumer
 import redis.asyncio as aioredis
@@ -23,6 +24,17 @@ from .config import (
     REDIS_URL,
 )
 from .storage import is_storage_ready, write_log_batch
+
+
+# Callback set by main.py so we don't create an import cycle.
+# Signature: (server_id: str, level: str, message: str) -> None
+_engine_ingest_hook: Optional[Callable[[str, str, str], None]] = None
+
+
+def set_engine_ingest_hook(hook: Callable[[str, str, str], None]) -> None:
+    """main.py registers the RuleEngine.ingest_log bound method here at startup."""
+    global _engine_ingest_hook
+    _engine_ingest_hook = hook
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger()
 
@@ -90,6 +102,17 @@ async def process_logs() -> None:
                                 rec = m.value
                                 buffer.append(rec)
                                 await _publish_live(redis_client, rec)
+                                # Feed into the in-process rule engine so
+                                # log-based / composite rules see this event.
+                                if _engine_ingest_hook is not None:
+                                    try:
+                                        _engine_ingest_hook(
+                                            str(rec.get("server_id", "")),
+                                            str(rec.get("level", "INFO")),
+                                            str(rec.get("message", "")),
+                                        )
+                                    except Exception as exc:
+                                        log.warning("log_consumer.engine_hook.error", error=str(exc))
                             except Exception as exc:
                                 log.warning("log_consumer.message.error", error=str(exc))
 
