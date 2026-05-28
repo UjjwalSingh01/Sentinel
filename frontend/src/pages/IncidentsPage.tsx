@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@apollo/client/react';
-import { AlertTriangle, Filter, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Filter, Layers, RefreshCw } from 'lucide-react';
 import { GET_INCIDENTS } from '@/graphql/queries';
 import { IncidentDetailDialog } from '@/components/incidents/IncidentDetailDialog';
 
@@ -18,6 +18,13 @@ export function IncidentsPage() {
 
   const incidents = (data as any)?.incidents || [];
 
+  // Hide child incidents from the top-level list; their existence is shown
+  // as a "+N related" pill on the parent row.
+  const visibleIncidents = useMemo(
+    () => incidents.filter((i: any) => !i.parentIncidentId),
+    [incidents],
+  );
+
   const statusTabs = [
     { value: 'all', label: 'All' },
     { value: 'open', label: 'Open' },
@@ -27,8 +34,8 @@ export function IncidentsPage() {
 
   const countByStatus = (s: string) =>
     s === 'all'
-      ? incidents.length
-      : incidents.filter((i: any) => i.status === s).length;
+      ? visibleIncidents.length
+      : visibleIncidents.filter((i: any) => i.status === s).length;
 
   return (
     <div className="p-6">
@@ -78,7 +85,7 @@ export function IncidentsPage() {
               <div key={i} className="h-16 bg-zinc-800/50 rounded-lg animate-pulse" />
             ))}
           </div>
-        ) : incidents.length === 0 ? (
+        ) : visibleIncidents.length === 0 ? (
           <div className="p-16 text-center text-muted-foreground">
             <AlertTriangle size={40} className="mx-auto mb-4 opacity-20" />
             <p className="text-lg font-medium">No incidents found</p>
@@ -116,7 +123,7 @@ export function IncidentsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/50">
-              {incidents.map((inc: any) => (
+              {visibleIncidents.map((inc: any) => (
                 <tr
                   key={inc.id}
                   onClick={() => setSelectedIncident(inc.id)}
@@ -138,7 +145,13 @@ export function IncidentsPage() {
                     {inc.metricType}
                   </td>
                   <td className="px-4 py-3 text-sm max-w-xs truncate">
-                    {inc.message}
+                    <span>{inc.message}</span>
+                    {inc.childCount > 0 && (
+                      <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-700/60 text-[10px] text-zinc-300">
+                        <Layers size={10} />
+                        +{inc.childCount} related
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span

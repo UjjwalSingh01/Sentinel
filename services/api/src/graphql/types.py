@@ -62,6 +62,13 @@ class IncidentType:
     # JSON-encoded snapshot of correlated logs at incident time.
     # Frontend parses via JSON.parse(). null when no logs were captured.
     log_context: Optional[str] = None
+    # Phase 2: which rule produced this incident.
+    rule_id: Optional[str] = None
+    rule_name: Optional[str] = None
+    # Phase 3: dedup + tracing.
+    parent_incident_id: Optional[str] = None
+    child_count: int = 0
+    exemplar_trace_ids: Optional[list[str]] = None
 
 
 @strawberry.type
@@ -94,3 +101,31 @@ class LogConnection:
     items: list[LogType]
     next_cursor: Optional[str] = None
     has_more: bool
+
+
+@strawberry.type
+class SpanType:
+    """One trace span. Sequence + nesting reconstructed via parent_span_id."""
+
+    time: datetime
+    trace_id: str
+    span_id: str
+    parent_span_id: Optional[str] = None
+    server_id: str
+    service: Optional[str] = None
+    name: str
+    duration_ms: float
+    status: Optional[str] = None
+    # JSON-encoded structured attributes; null if none.
+    attributes: Optional[str] = None
+
+
+@strawberry.type
+class TraceType:
+    """All spans for a single trace_id, ordered for waterfall rendering."""
+
+    trace_id: str
+    server_id: str
+    root_name: str
+    root_duration_ms: float
+    spans: list[SpanType]

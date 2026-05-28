@@ -13,17 +13,24 @@ import {
   Server,
   Terminal,
   ExternalLink,
+  GitBranch,
+  Layers,
 } from 'lucide-react';
 import { ACKNOWLEDGE_INCIDENT, RESOLVE_INCIDENT, ASSIGN_INCIDENT, REQUEST_AI_ANALYSIS } from '@/graphql/mutations';
 import { GET_INCIDENT, GET_USERS } from '@/graphql/queries';
+import { GET_INCIDENT_CHILDREN } from '@/graphql/traces';
+import { TracesPanel } from './TracesPanel';
 
 interface IncidentDetailDialogProps {
   incidentId: string | null;
   onClose: () => void;
 }
 
+type CorrelatedTab = 'logs' | 'traces' | 'children';
+
 export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDialogProps) {
   const [aiLoading, setAiLoading] = useState(false);
+  const [correlatedTab, setCorrelatedTab] = useState<CorrelatedTab>('logs');
 
   const { data: incidentData, loading, refetch } = useQuery(GET_INCIDENT, {
     variables: { id: incidentId },
@@ -31,6 +38,18 @@ export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDial
   });
 
   const { data: usersData } = useQuery(GET_USERS);
+  const { data: childrenData } = useQuery(GET_INCIDENT_CHILDREN, {
+    variables: { parentId: incidentId },
+    skip: !incidentId,
+  });
+  const childIncidents: Array<{
+    id: string;
+    serverId: string;
+    severity: string;
+    message: string;
+    createdAt: string;
+    ruleName?: string | null;
+  }> = (childrenData as any)?.incidentChildren || [];
 
   const [acknowledgeIncident] = useMutation(ACKNOWLEDGE_INCIDENT);
   const [resolveIncident] = useMutation(RESOLVE_INCIDENT);
@@ -224,59 +243,134 @@ export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDial
               </select>
             </div>
 
-            {/* Correlated logs */}
+            {/* Correlated evidence tabs: logs / traces / children */}
             <div className="bg-zinc-900 rounded-lg p-4">
               <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <Terminal size={14} className="text-emerald-400" />
-                  <span className="text-sm font-semibold">Correlated Logs</span>
-                  {logContext?.total_lines !== undefined && (
-                    <span className="text-[11px] text-muted-foreground">
-                      ({logContext.total_lines} WARN/ERROR/FATAL captured)
-                    </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setCorrelatedTab('logs')}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                      correlatedTab === 'logs'
+                        ? 'bg-zinc-800 text-emerald-400'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <Terminal size={12} />
+                    Logs
+                    {logContext?.total_lines ? (
+                      <span className="opacity-60 text-[10px]">{logContext.total_lines}</span>
+                    ) : null}
+                  </button>
+                  <button
+                    onClick={() => setCorrelatedTab('traces')}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                      correlatedTab === 'traces'
+                        ? 'bg-zinc-800 text-emerald-400'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <GitBranch size={12} />
+                    Traces
+                    {incident.exemplarTraceIds?.length ? (
+                      <span className="opacity-60 text-[10px]">{incident.exemplarTraceIds.length}</span>
+                    ) : null}
+                  </button>
+                  {incident.childCount > 0 && (
+                    <button
+                      onClick={() => setCorrelatedTab('children')}
+                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                        correlatedTab === 'children'
+                          ? 'bg-zinc-800 text-emerald-400'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      <Layers size={12} />
+                      Related
+                      <span className="opacity-60 text-[10px]">{incident.childCount}</span>
+                    </button>
                   )}
                 </div>
-                <Link
-                  to={`/logs?serverId=${encodeURIComponent(incident.serverId)}`}
-                  className="text-[11px] text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1"
-                >
-                  Open in Logs <ExternalLink size={11} />
-                </Link>
+                {correlatedTab === 'logs' && (
+                  <Link
+                    to={`/logs?serverId=${encodeURIComponent(incident.serverId)}`}
+                    className="text-[11px] text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1"
+                  >
+                    Open in Logs <ExternalLink size={11} />
+                  </Link>
+                )}
               </div>
-              {logContext && logContext.templates && logContext.templates.length > 0 ? (
-                <div className="space-y-1.5">
-                  {logContext.templates.slice(0, 8).map((t, i) => (
-                    <div key={i} className="bg-zinc-800/60 rounded p-2 font-mono text-[11px]">
-                      <div className="flex items-start gap-2">
+
+              {correlatedTab === 'logs' && (
+                logContext && logContext.templates && logContext.templates.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {logContext.templates.slice(0, 8).map((t, i) => (
+                      <div key={i} className="bg-zinc-800/60 rounded p-2 font-mono text-[11px]">
+                        <div className="flex items-start gap-2">
+                          <span
+                            className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                              t.level === 'FATAL' || t.level === 'ERROR'
+                                ? 'bg-red-500/20 text-red-400'
+                                : t.level === 'WARN' || t.level === 'WARNING'
+                                ? 'bg-amber-500/20 text-amber-400'
+                                : 'bg-zinc-700 text-zinc-300'
+                            }`}
+                          >
+                            ×{t.count} {t.level}
+                          </span>
+                          <span className="text-foreground/80 break-all">{t.template}</span>
+                        </div>
+                        {t.samples && t.samples.length > 0 && (
+                          <div className="mt-1 ml-2 text-muted-foreground">
+                            {t.samples.slice(0, 2).map((s, j) => (
+                              <div key={j} className="truncate" title={s}>
+                                e.g. {s}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground italic">
+                    No log evidence was captured for this incident.
+                  </p>
+                )
+              )}
+
+              {correlatedTab === 'traces' && (
+                incidentId ? <TracesPanel incidentId={incidentId} /> : null
+              )}
+
+              {correlatedTab === 'children' && (
+                childIncidents.length > 0 ? (
+                  <div className="space-y-1.5 text-[12px]">
+                    {childIncidents.map((c) => (
+                      <div
+                        key={c.id}
+                        className="bg-zinc-800/60 rounded p-2 flex items-center gap-3"
+                      >
                         <span
-                          className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            t.level === 'FATAL' || t.level === 'ERROR'
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            c.severity === 'critical'
                               ? 'bg-red-500/20 text-red-400'
-                              : t.level === 'WARN' || t.level === 'WARNING'
-                              ? 'bg-amber-500/20 text-amber-400'
-                              : 'bg-zinc-700 text-zinc-300'
+                              : 'bg-amber-500/20 text-amber-400'
                           }`}
                         >
-                          ×{t.count} {t.level}
+                          {c.severity.toUpperCase()}
                         </span>
-                        <span className="text-foreground/80 break-all">{t.template}</span>
+                        <span className="font-mono text-xs text-muted-foreground shrink-0">
+                          {c.serverId}
+                        </span>
+                        <span className="truncate text-foreground/80">{c.message}</span>
                       </div>
-                      {t.samples && t.samples.length > 0 && (
-                        <div className="mt-1 ml-2 text-muted-foreground">
-                          {t.samples.slice(0, 2).map((s, j) => (
-                            <div key={j} className="truncate" title={s}>
-                              e.g. {s}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground italic">
-                  No log evidence was captured for this incident.
-                </p>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground italic">
+                    No related child incidents.
+                  </p>
+                )
               )}
             </div>
 

@@ -20,6 +20,7 @@ from .db.models import User
 from .graphql.schema import graphql_router
 from .routes.auth import router as auth_router
 from .routes.health import router as health_router
+from .routes.spans import router as spans_router
 from .routes.sse import router as sse_router
 from .services.ai_service import init_gemini
 from .services.redis_service import close_redis, init_redis
@@ -162,6 +163,44 @@ async def _ensure_schema() -> None:
             ALTER TABLE incidents
             ADD COLUMN IF NOT EXISTS rule_name TEXT;
         """)
+        # Phase 3
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS parent_incident_id TEXT;
+        """)
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS dedup_fingerprint TEXT;
+        """)
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS exemplar_trace_ids TEXT[];
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS spans (
+                time            TIMESTAMPTZ NOT NULL,
+                trace_id        TEXT NOT NULL,
+                span_id         TEXT NOT NULL,
+                parent_span_id  TEXT,
+                server_id       TEXT NOT NULL,
+                service         TEXT,
+                name            TEXT NOT NULL,
+                duration_ms     DOUBLE PRECISION NOT NULL,
+                status          TEXT,
+                attributes      JSONB
+            );
+        """)
+        await conn.execute("""
+            SELECT create_hypertable('spans', 'time', if_not_exists => TRUE, chunk_time_interval => INTERVAL '1 hour');
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_spans_server_time
+            ON spans (server_id, time DESC);
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_spans_trace_id
+            ON spans (trace_id);
+        """)
 
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS alert_rules (
@@ -261,6 +300,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(health_router)
 app.include_router(sse_router)
+app.include_router(spans_router)
 
 # GraphQL
 app.include_router(graphql_router)

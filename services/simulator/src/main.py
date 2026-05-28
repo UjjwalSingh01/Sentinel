@@ -42,6 +42,8 @@ INGESTION_URL: Final[str] = os.getenv("INGESTION_URL", "http://ingestion:8001")
 INGEST_ENDPOINT: Final[str] = f"{INGESTION_URL}/api/ingest"
 LOG_INGESTION_URL: Final[str] = os.getenv("LOG_INGESTION_URL", "http://log-ingestion:8003")
 LOG_INGEST_ENDPOINT: Final[str] = f"{LOG_INGESTION_URL}/api/logs"
+API_URL: Final[str] = os.getenv("API_URL", "http://api:8000")
+SPAN_INGEST_ENDPOINT: Final[str] = f"{API_URL}/api/spans"
 INTERVAL_SECONDS: Final[float] = 3.0
 SPIKE_PROBABILITY: Final[float] = 0.15  # 15% chance per tick per server to START a spike
 
@@ -50,6 +52,8 @@ SPIKE_PROBABILITY: Final[float] = 0.15  # 15% chance per tick per server to STAR
 # ---------------------------------------------------------------------------
 SERVERS: Final[list[dict[str, str]]] = [
     {"id": "prod-web-01", "role": "web"},
+    {"id": "prod-web-02", "role": "web"},
+    {"id": "prod-api-01", "role": "api"},
     {"id": "prod-api-02", "role": "api"},
     {"id": "prod-worker-03", "role": "worker"},
     {"id": "staging-db-01", "role": "database"},
@@ -125,6 +129,76 @@ class ServerSimulator:
             "latency_ms": round(latency, 2),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+    def generate_traces(self) -> list[dict[str, object]]:
+        """
+        Emit 1-2 traces per tick: a root request span + 2-3 child spans
+        (auth, db query, downstream call). Span durations correlate with
+        the metric spike state so exemplar selection at incident time
+        surfaces meaningfully slow traces.
+        """
+        traces: list[dict[str, object]] = []
+        service_name = f"{self.role}-svc"
+        now = datetime.now(timezone.utc)
+
+        for _ in range(random.randint(1, 2)):
+            trace_id = _hex_id(16)
+            root_span_id = _hex_id(8)
+
+            # Latency scaling: 1× normally, 6-15× during a latency spike, 2-4× during cpu/memory spike
+            if self._active_spike == "latency":
+                latency_mult = random.uniform(6.0, 15.0)
+            elif self._active_spike in ("cpu", "memory"):
+                latency_mult = random.uniform(2.0, 4.0)
+            else:
+                latency_mult = 1.0
+
+            child_specs: list[tuple[str, float]] = [
+                ("auth.verify_token", random.uniform(5, 25)),
+                ("db.query", random.uniform(15, 60) * latency_mult),
+                ("downstream.payment_api", random.uniform(40, 120) * latency_mult),
+            ]
+            # Keep only some children per request to vary trace shape
+            random.shuffle(child_specs)
+            child_specs = child_specs[: random.randint(2, 3)]
+
+            children_total_ms = sum(d for _, d in child_specs)
+            root_duration_ms = children_total_ms + random.uniform(5, 20)
+            root_status = "OK" if latency_mult < 2.5 else "ERROR" if random.random() < 0.4 else "OK"
+
+            traces.append({
+                "trace_id": trace_id,
+                "span_id": root_span_id,
+                "parent_span_id": None,
+                "server_id": self.server_id,
+                "service": service_name,
+                "name": random.choice([
+                    "GET /api/orders",
+                    "POST /api/login",
+                    "PUT /api/users/{id}",
+                    "GET /api/health",
+                ]),
+                "start": now.isoformat(),
+                "duration_ms": round(root_duration_ms, 2),
+                "status": root_status,
+                "attributes": {"http.status": 200 if root_status == "OK" else 504},
+            })
+
+            for name, dur in child_specs:
+                traces.append({
+                    "trace_id": trace_id,
+                    "span_id": _hex_id(8),
+                    "parent_span_id": root_span_id,
+                    "server_id": self.server_id,
+                    "service": service_name,
+                    "name": name,
+                    "start": now.isoformat(),
+                    "duration_ms": round(dur, 2),
+                    "status": "OK" if dur < 200 else "ERROR",
+                    "attributes": {"db.statement": "SELECT ..."} if "db" in name else None,
+                })
+
+        return traces
 
     def generate_logs(self) -> list[dict[str, object]]:
         """
@@ -205,14 +279,18 @@ async def run_simulator() -> None:
         while True:
             tasks: list[asyncio.Task[None]] = []
             batched_logs: list[dict[str, object]] = []
+            batched_spans: list[dict[str, object]] = []
 
             for sim in simulators:
                 metrics = sim.generate_metrics()
                 tasks.append(asyncio.create_task(_send_metrics(client, metrics)))
                 batched_logs.extend(sim.generate_logs())
+                batched_spans.extend(sim.generate_traces())
 
             if batched_logs:
                 tasks.append(asyncio.create_task(_send_logs(client, batched_logs)))
+            if batched_spans:
+                tasks.append(asyncio.create_task(_send_spans(client, batched_spans)))
 
             await asyncio.gather(*tasks, return_exceptions=True)
             await asyncio.sleep(INTERVAL_SECONDS)
@@ -253,6 +331,26 @@ async def _send_logs(client: httpx.AsyncClient, records: list[dict[str, object]]
             )
     except httpx.RequestError as exc:
         log.error("log.send_failed", error=str(exc), count=len(records))
+
+
+async def _send_spans(client: httpx.AsyncClient, spans: list[dict[str, object]]) -> None:
+    """Send a batch of trace spans to the api span ingest endpoint."""
+    try:
+        response = await client.post(SPAN_INGEST_ENDPOINT, json={"spans": spans})
+        if response.status_code != 200:
+            log.warning(
+                "span.rejected",
+                status=response.status_code,
+                count=len(spans),
+                body=response.text[:200],
+            )
+    except httpx.RequestError as exc:
+        log.error("span.send_failed", error=str(exc), count=len(spans))
+
+
+def _hex_id(n_bytes: int) -> str:
+    """Hex id of `n_bytes` bytes (so 8 bytes -> 16 hex chars)."""
+    return "".join(random.choice("0123456789abcdef") for _ in range(n_bytes * 2))
 
 
 # ---------------------------------------------------------------------------

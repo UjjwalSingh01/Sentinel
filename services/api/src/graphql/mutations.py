@@ -188,4 +188,9 @@ async def _to_incident_type(inc: Incident, session: object) -> IncidentType:
         acknowledged_at=inc.acknowledged_at,
         resolved_at=inc.resolved_at,
         log_context=json.dumps(inc.log_context) if inc.log_context else None,
+        rule_id=inc.rule_id,
+        rule_name=inc.rule_name,
+        parent_incident_id=inc.parent_incident_id,
+        child_count=0,
+        exemplar_trace_ids=list(inc.exemplar_trace_ids) if inc.exemplar_trace_ids else None,
     )

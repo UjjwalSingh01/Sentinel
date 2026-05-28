@@ -14,11 +14,61 @@ import base64
 from ..db.database import async_session, get_raw_pool
 from ..db.models import Incident, User
 from ..services.redis_service import get_all_server_states
-from .types import IncidentType, LogConnection, LogType, MetricPointType, ServerType, UserType
+from .types import (
+    IncidentType,
+    LogConnection,
+    LogType,
+    MetricPointType,
+    ServerType,
+    SpanType,
+    TraceType,
+    UserType,
+)
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger()
+
+
+def _user_to_type(user: Optional[User]) -> Optional[UserType]:
+    if user is None:
+        return None
+    return UserType(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        role=user.role,
+        created_at=user.created_at,
+    )
+
+
+def _incident_to_type(
+    inc: Incident,
+    assignee: Optional[UserType],
+    child_count: int = 0,
+) -> IncidentType:
+    return IncidentType(
+        id=inc.id,
+        server_id=inc.server_id,
+        metric_type=inc.metric_type,
+        severity=inc.severity,
+        current_value=inc.current_value,
+        threshold=inc.threshold,
+        message=inc.message,
+        status=inc.status,
+        ai_analysis=inc.ai_analysis,
+        assignee_id=inc.assignee_id,
+        assignee=assignee,
+        created_at=inc.created_at,
+        acknowledged_at=inc.acknowledged_at,
+        resolved_at=inc.resolved_at,
+        log_context=json.dumps(inc.log_context) if inc.log_context else None,
+        rule_id=inc.rule_id,
+        rule_name=inc.rule_name,
+        parent_incident_id=inc.parent_incident_id,
+        child_count=child_count,
+        exemplar_trace_ids=list(inc.exemplar_trace_ids) if inc.exemplar_trace_ids else None,
+    )
 
 
 @strawberry.type
@@ -107,6 +157,17 @@ class Query:
             result = await session.execute(query)
             incidents = result.scalars().all()
 
+            # Batch the child-count lookup for all returned incidents
+            ids = [inc.id for inc in incidents]
+            child_counts: dict[str, int] = {}
+            if ids:
+                child_result = await session.execute(
+                    select(Incident.parent_incident_id, func.count())
+                    .where(Incident.parent_incident_id.in_(ids))
+                    .group_by(Incident.parent_incident_id)
+                )
+                child_counts = {pid: int(c) for pid, c in child_result.all() if pid}
+
             incident_types: list[IncidentType] = []
             for inc in incidents:
                 assignee = None
@@ -114,34 +175,9 @@ class Query:
                     user_result = await session.execute(
                         select(User).where(User.id == inc.assignee_id)
                     )
-                    user = user_result.scalar_one_or_none()
-                    if user:
-                        assignee = UserType(
-                            id=user.id,
-                            email=user.email,
-                            name=user.name,
-                            role=user.role,
-                            created_at=user.created_at,
-                        )
-
+                    assignee = _user_to_type(user_result.scalar_one_or_none())
                 incident_types.append(
-                    IncidentType(
-                        id=inc.id,
-                        server_id=inc.server_id,
-                        metric_type=inc.metric_type,
-                        severity=inc.severity,
-                        current_value=inc.current_value,
-                        threshold=inc.threshold,
-                        message=inc.message,
-                        status=inc.status,
-                        ai_analysis=inc.ai_analysis,
-                        assignee_id=inc.assignee_id,
-                        assignee=assignee,
-                        created_at=inc.created_at,
-                        acknowledged_at=inc.acknowledged_at,
-                        resolved_at=inc.resolved_at,
-                        log_context=json.dumps(inc.log_context) if inc.log_context else None,
-                    )
+                    _incident_to_type(inc, assignee, child_counts.get(inc.id, 0))
                 )
 
             return incident_types
@@ -162,33 +198,13 @@ class Query:
                 user_result = await session.execute(
                     select(User).where(User.id == inc.assignee_id)
                 )
-                user = user_result.scalar_one_or_none()
-                if user:
-                    assignee = UserType(
-                        id=user.id,
-                        email=user.email,
-                        name=user.name,
-                        role=user.role,
-                        created_at=user.created_at,
-                    )
+                assignee = _user_to_type(user_result.scalar_one_or_none())
 
-            return IncidentType(
-                id=inc.id,
-                server_id=inc.server_id,
-                metric_type=inc.metric_type,
-                severity=inc.severity,
-                current_value=inc.current_value,
-                threshold=inc.threshold,
-                message=inc.message,
-                status=inc.status,
-                ai_analysis=inc.ai_analysis,
-                assignee_id=inc.assignee_id,
-                assignee=assignee,
-                created_at=inc.created_at,
-                acknowledged_at=inc.acknowledged_at,
-                resolved_at=inc.resolved_at,
-                log_context=json.dumps(inc.log_context) if inc.log_context else None,
+            child_count_result = await session.execute(
+                select(func.count()).where(Incident.parent_incident_id == inc.id)
             )
+            child_count = int(child_count_result.scalar() or 0)
+            return _incident_to_type(inc, assignee, child_count)
 
     @strawberry.field
     async def users(self) -> list[UserType]:
@@ -206,6 +222,96 @@ class Query:
                 )
                 for u in users
             ]
+
+    @strawberry.field
+    async def incident_children(self, parent_id: str) -> list[IncidentType]:
+        """Return all child incidents grouped under `parent_id`."""
+        async with async_session() as session:
+            result = await session.execute(
+                select(Incident)
+                .where(Incident.parent_incident_id == parent_id)
+                .order_by(Incident.created_at.asc())
+            )
+            children = result.scalars().all()
+            out: list[IncidentType] = []
+            for inc in children:
+                assignee = None
+                if inc.assignee_id:
+                    u = await session.execute(
+                        select(User).where(User.id == inc.assignee_id)
+                    )
+                    assignee = _user_to_type(u.scalar_one_or_none())
+                out.append(_incident_to_type(inc, assignee, 0))
+            return out
+
+    @strawberry.field
+    async def incident_traces(self, incident_id: str) -> list[TraceType]:
+        """
+        Return reconstructed traces for the exemplar trace_ids attached to an
+        incident. One TraceType per exemplar; spans ordered by start time.
+        """
+        async with async_session() as session:
+            result = await session.execute(
+                select(Incident).where(Incident.id == incident_id)
+            )
+            inc = result.scalar_one_or_none()
+        if inc is None or not inc.exemplar_trace_ids:
+            return []
+
+        pool = await get_raw_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT time, trace_id, span_id, parent_span_id, server_id,
+                       service, name, duration_ms, status, attributes
+                FROM spans
+                WHERE trace_id = ANY($1::text[])
+                ORDER BY trace_id, time ASC
+                """,
+                list(inc.exemplar_trace_ids),
+            )
+
+        by_trace: dict[str, list[SpanType]] = {}
+        for r in rows:
+            attrs = r["attributes"]
+            attrs_str: Optional[str]
+            if attrs is None:
+                attrs_str = None
+            elif isinstance(attrs, str):
+                attrs_str = attrs
+            else:
+                attrs_str = json.dumps(attrs)
+            by_trace.setdefault(r["trace_id"], []).append(
+                SpanType(
+                    time=r["time"],
+                    trace_id=r["trace_id"],
+                    span_id=r["span_id"],
+                    parent_span_id=r["parent_span_id"],
+                    server_id=r["server_id"],
+                    service=r["service"],
+                    name=r["name"],
+                    duration_ms=float(r["duration_ms"]),
+                    status=r["status"],
+                    attributes=attrs_str,
+                )
+            )
+
+        traces: list[TraceType] = []
+        for trace_id in inc.exemplar_trace_ids:
+            spans = by_trace.get(trace_id, [])
+            if not spans:
+                continue
+            root = next((s for s in spans if s.parent_span_id is None), spans[0])
+            traces.append(
+                TraceType(
+                    trace_id=trace_id,
+                    server_id=root.server_id,
+                    root_name=root.name,
+                    root_duration_ms=root.duration_ms,
+                    spans=spans,
+                )
+            )
+        return traces
 
     @strawberry.field
     async def logs(

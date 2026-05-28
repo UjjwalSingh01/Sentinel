@@ -95,6 +95,60 @@ async def init_storage() -> None:
             ALTER TABLE incidents
             ADD COLUMN IF NOT EXISTS rule_name TEXT;
         """)
+        # Phase 3: dedup + tracing
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS parent_incident_id TEXT;
+        """)
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS dedup_fingerprint TEXT;
+        """)
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS exemplar_trace_ids TEXT[];
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_incidents_dedup
+            ON incidents (dedup_fingerprint, created_at DESC)
+            WHERE parent_incident_id IS NULL;
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_incidents_parent
+            ON incidents (parent_incident_id);
+        """)
+
+        # Spans hypertable (Phase 3 §2.1)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS spans (
+                time            TIMESTAMPTZ NOT NULL,
+                trace_id        TEXT NOT NULL,
+                span_id         TEXT NOT NULL,
+                parent_span_id  TEXT,
+                server_id       TEXT NOT NULL,
+                service         TEXT,
+                name            TEXT NOT NULL,
+                duration_ms     DOUBLE PRECISION NOT NULL,
+                status          TEXT,
+                attributes      JSONB
+            );
+        """)
+        await conn.execute("""
+            SELECT create_hypertable('spans', 'time', if_not_exists => TRUE, chunk_time_interval => INTERVAL '1 hour');
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_spans_server_time
+            ON spans (server_id, time DESC);
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_spans_trace_id
+            ON spans (trace_id);
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_spans_slow
+            ON spans (server_id, time DESC, duration_ms DESC)
+            WHERE parent_span_id IS NULL;
+        """)
 
         # Alert rules table (Phase 2: DB-driven rule engine)
         await conn.execute("""
@@ -197,6 +251,9 @@ async def create_incident(
     log_context: Optional[dict[str, Any]] = None,
     rule_id: Optional[str] = None,
     rule_name: Optional[str] = None,
+    parent_incident_id: Optional[str] = None,
+    dedup_fingerprint: Optional[str] = None,
+    exemplar_trace_ids: Optional[list[str]] = None,
 ) -> None:
     """Create an incident record in PostgreSQL with optional pre-captured log context."""
     if _pool is None:
@@ -207,13 +264,15 @@ async def create_incident(
             """
             INSERT INTO incidents
                 (id, server_id, metric_type, severity, current_value, threshold,
-                 message, status, log_context, rule_id, rule_name)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8::jsonb, $9, $10)
+                 message, status, log_context, rule_id, rule_name,
+                 parent_incident_id, dedup_fingerprint, exemplar_trace_ids)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8::jsonb, $9, $10, $11, $12, $13)
             ON CONFLICT (id) DO NOTHING
             """,
             incident_id, server_id, metric_type, severity, current_value, threshold, message,
             json.dumps(log_context) if log_context is not None else None,
             rule_id, rule_name,
+            parent_incident_id, dedup_fingerprint, exemplar_trace_ids,
         )
     log.info(
         "storage.incident.created",
@@ -221,8 +280,70 @@ async def create_incident(
         server_id=server_id,
         severity=severity,
         rule_id=rule_id,
+        parent_incident_id=parent_incident_id,
+        exemplars=len(exemplar_trace_ids) if exemplar_trace_ids else 0,
         has_log_context=log_context is not None,
     )
+
+
+async def find_parent_incident(
+    rule_id: str,
+    dedup_fingerprint: str,
+    within_seconds: int = 60,
+) -> Optional[str]:
+    """
+    Look up an existing parent incident matching this fingerprint that opened
+    within the last `within_seconds`. Returns the parent incident id or None.
+    """
+    if _pool is None:
+        raise RuntimeError("Storage pool is not initialized")
+
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"""
+            SELECT id FROM incidents
+            WHERE dedup_fingerprint = $1
+              AND rule_id = $2
+              AND parent_incident_id IS NULL
+              AND created_at > NOW() - INTERVAL '{int(within_seconds)} seconds'
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            dedup_fingerprint, rule_id,
+        )
+    return row["id"] if row else None
+
+
+async def pick_exemplar_traces(
+    server_id: str,
+    anchor: datetime,
+    before_s: int = 60,
+    after_s: int = 30,
+    limit: int = 2,
+) -> list[str]:
+    """
+    Return the trace_ids of the top-`limit` slowest root spans on `server_id`
+    in the [anchor-before_s, anchor+after_s] window.
+    """
+    if _pool is None:
+        raise RuntimeError("Storage pool is not initialized")
+
+    start = anchor - timedelta(seconds=before_s)
+    end = anchor + timedelta(seconds=after_s)
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT trace_id
+            FROM spans
+            WHERE server_id = $1
+              AND time BETWEEN $2 AND $3
+              AND parent_span_id IS NULL
+            ORDER BY duration_ms DESC
+            LIMIT $4
+            """,
+            server_id, start, end, int(limit),
+        )
+    return [r["trace_id"] for r in rows]
 
 
 # ---------------------------------------------------------------------------

@@ -46,6 +46,11 @@ export const GET_INCIDENTS = gql`
       acknowledgedAt
       resolvedAt
       logContext
+      ruleId
+      ruleName
+      parentIncidentId
+      childCount
+      exemplarTraceIds
     }
   }
 `;
@@ -72,6 +77,11 @@ export const GET_INCIDENT = gql`
       acknowledgedAt
       resolvedAt
       logContext
+      ruleId
+      ruleName
+      parentIncidentId
+      childCount
+      exemplarTraceIds
     }
   }
 `;

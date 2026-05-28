@@ -5,7 +5,7 @@ Sentinel API Service — SQLAlchemy Models
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Float, String, Text, func
+from sqlalchemy import ARRAY, DateTime, Float, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -52,4 +52,11 @@ class Incident(Base):
     )
     log_context: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True
+    )
+    rule_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rule_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    parent_incident_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    dedup_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    exemplar_trace_ids: Mapped[list[str] | None] = mapped_column(
+        ARRAY(String), nullable=True
     )

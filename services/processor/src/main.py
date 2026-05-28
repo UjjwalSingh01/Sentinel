@@ -25,6 +25,7 @@ from .alerter import (
     update_server_state,
 )
 from .consumer import create_consumer, parse_timestamp
+from .dedup import compute_fingerprint
 from .drain import cluster_logs
 from .log_consumer import process_logs, set_engine_ingest_hook
 from .rule_engine import AlertRule, RuleEngine, Severity
@@ -32,8 +33,10 @@ from .storage import (
     close_storage,
     create_incident,
     fetch_log_snapshot,
+    find_parent_incident,
     init_storage,
     load_alert_rules,
+    pick_exemplar_traces,
     seed_default_rules,
     write_metric,
 )
@@ -125,35 +128,54 @@ async def process_metrics() -> None:
                 for alert in fired_alerts:
                     cooldown_key = f"{alert.rule_id}:{alert.metric_type}"
                     in_cooldown = await check_cooldown(alert.server_id, cooldown_key)
-                    if not in_cooldown:
-                        incident_id = str(uuid.uuid4())
+                    if in_cooldown:
+                        continue
 
-                        # Eager log snapshot: capture surrounding WARN/ERROR/FATAL
-                        # logs into the incident row before the SSE fire-out.
-                        log_context = await _build_log_context(
-                            server_id=alert.server_id,
-                            anchor=timestamp,
-                        )
+                    incident_id = str(uuid.uuid4())
 
-                        # Create incident in DB
-                        await create_incident(
-                            incident_id=incident_id,
-                            server_id=alert.server_id,
-                            metric_type=alert.metric_type,
-                            severity=alert.severity.value,
-                            current_value=alert.current_value,
-                            threshold=alert.threshold,
-                            message=alert.message,
-                            log_context=log_context,
-                            rule_id=alert.rule_id,
-                            rule_name=alert.rule_name,
-                        )
+                    # Dedup: incidents on related servers (same role) firing
+                    # the same rule within 60s collapse under one parent.
+                    fingerprint, _group = compute_fingerprint(
+                        alert.rule_id, alert.server_id, timestamp,
+                    )
+                    parent_id = await find_parent_incident(alert.rule_id, fingerprint)
 
-                        # Publish to Redis pub/sub
+                    # Eager log snapshot: capture surrounding WARN/ERROR/FATAL
+                    # logs into the incident row before the SSE fire-out.
+                    log_context = await _build_log_context(
+                        server_id=alert.server_id,
+                        anchor=timestamp,
+                    )
+
+                    # Exemplar traces: top-2 slowest root spans in the window
+                    exemplars = await pick_exemplar_traces(
+                        server_id=alert.server_id,
+                        anchor=timestamp,
+                    )
+
+                    await create_incident(
+                        incident_id=incident_id,
+                        server_id=alert.server_id,
+                        metric_type=alert.metric_type,
+                        severity=alert.severity.value,
+                        current_value=alert.current_value,
+                        threshold=alert.threshold,
+                        message=alert.message,
+                        log_context=log_context,
+                        rule_id=alert.rule_id,
+                        rule_name=alert.rule_name,
+                        parent_incident_id=parent_id,
+                        dedup_fingerprint=fingerprint,
+                        exemplar_trace_ids=exemplars or None,
+                    )
+
+                    # Only publish parents to the SSE feed; children are
+                    # discoverable via parent.children in the UI. This keeps
+                    # the live feed quiet during multi-server incident storms.
+                    if parent_id is None:
                         await publish_alert(alert, incident_id)
 
-                        # Set cooldown
-                        await set_cooldown(alert.server_id, cooldown_key)
+                    await set_cooldown(alert.server_id, cooldown_key)
 
                 log.debug(
                     "metric.processed",
