@@ -129,3 +129,47 @@ class TraceType:
     root_name: str
     root_duration_ms: float
     spans: list[SpanType]
+
+
+@strawberry.type
+class AlertRuleType:
+    """A DB-stored alert rule."""
+
+    id: str
+    name: str
+    type: str  # 'metric' | 'log' | 'composite'
+    severity: str
+    # JSON-encoded expression; frontend parses & edits structurally.
+    expression: str
+    enabled: bool
+    runbook_url: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+@strawberry.type
+class DashboardType:
+    """A user-saved dashboard layout."""
+
+    id: str
+    owner_id: str
+    name: str
+    # JSON-encoded layout: array of widget cells.
+    layout: str
+    is_default: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+@strawberry.type
+class SavedFilterType:
+    """A bookmarked filter for the incidents or logs pages."""
+
+    id: str
+    owner_id: str
+    name: str
+    scope: str  # 'incidents' | 'logs'
+    # JSON-encoded filter state.
+    filter: str
+    created_at: datetime

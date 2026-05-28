@@ -3,6 +3,7 @@ import { useQuery } from '@apollo/client/react';
 import { AlertTriangle, Filter, Layers, RefreshCw } from 'lucide-react';
 import { GET_INCIDENTS } from '@/graphql/queries';
 import { IncidentDetailDialog } from '@/components/incidents/IncidentDetailDialog';
+import { SavedFilterBar } from '@/components/filters/SavedFilterBar';
 
 export function IncidentsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -57,24 +58,33 @@ export function IncidentsPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-2 mb-6">
-        <Filter size={14} className="text-muted-foreground" />
-        {statusTabs.map((tab) => (
-          <button
-            key={tab.value}
-            onClick={() => setStatusFilter(tab.value)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${
-              statusFilter === tab.value
-                ? 'bg-emerald-500/20 text-emerald-400'
-                : 'text-muted-foreground hover:text-foreground hover:bg-zinc-800'
-            }`}
-          >
-            {tab.label}
-            <span className="ml-1.5 text-[10px] opacity-60">
-              ({countByStatus(tab.value)})
-            </span>
-          </button>
-        ))}
+      <div className="space-y-2 mb-6">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Filter size={14} className="text-muted-foreground" />
+          {statusTabs.map((tab) => (
+            <button
+              key={tab.value}
+              onClick={() => setStatusFilter(tab.value)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${
+                statusFilter === tab.value
+                  ? 'bg-emerald-500/20 text-emerald-400'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-zinc-800'
+              }`}
+            >
+              {tab.label}
+              <span className="ml-1.5 text-[10px] opacity-60">
+                ({countByStatus(tab.value)})
+              </span>
+            </button>
+          ))}
+        </div>
+        <SavedFilterBar
+          scope="incidents"
+          currentFilter={{ status: statusFilter }}
+          onApply={(f) => {
+            if (typeof f.status === 'string') setStatusFilter(f.status);
+          }}
+        />
       </div>
 
       {/* Incidents Table */}

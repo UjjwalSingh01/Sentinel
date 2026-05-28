@@ -16,6 +16,8 @@ from typing import AsyncIterator
 import structlog
 from fastapi import FastAPI
 
+import redis.asyncio as aioredis
+
 from .alerter import (
     check_cooldown,
     close_alerter,
@@ -24,6 +26,7 @@ from .alerter import (
     set_cooldown,
     update_server_state,
 )
+from .config import REDIS_URL
 from .consumer import create_consumer, parse_timestamp
 from .dedup import compute_fingerprint
 from .drain import cluster_logs
@@ -90,6 +93,39 @@ async def _refresh_rules() -> None:
     rules = _rules_from_rows(rows)
     engine.set_rules(rules)
     log.info("processor.rules.loaded", count=len(rules))
+
+
+async def _watch_rule_changes() -> None:
+    """
+    Subscribe to `alert_rules.changed` and reload the engine when the API
+    service signals a CRUD event. Self-heals through Redis reconnects.
+    """
+    while True:
+        try:
+            redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+            pubsub = redis_client.pubsub()
+            await pubsub.subscribe("alert_rules.changed")
+            log.info("processor.rule_watch.subscribed")
+
+            async for message in pubsub.listen():
+                if message.get("type") != "message":
+                    continue
+                log.info("processor.rule_watch.event", data=message.get("data"))
+                try:
+                    await _refresh_rules()
+                except Exception as exc:
+                    log.error("processor.rule_watch.refresh_failed", error=str(exc))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("processor.rule_watch.reconnecting", error=str(exc))
+            await asyncio.sleep(2.0)
+        finally:
+            try:
+                await pubsub.aclose()  # type: ignore[has-type]
+                await redis_client.aclose()  # type: ignore[has-type]
+            except Exception:
+                pass
 
 
 async def process_metrics() -> None:
@@ -222,22 +258,24 @@ async def _build_log_context(server_id: str, anchor: datetime) -> dict[str, obje
 # ---------------------------------------------------------------------------
 _processing_task: asyncio.Task[None] | None = None
 _log_task: asyncio.Task[None] | None = None
+_rule_watch_task: asyncio.Task[None] | None = None
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Start/stop the processor and its dependencies."""
-    global _processing_task, _log_task
+    global _processing_task, _log_task, _rule_watch_task
 
     log.info("processor.starting")
 
     _processing_task = asyncio.create_task(process_metrics())
     _log_task = asyncio.create_task(process_logs())
+    _rule_watch_task = asyncio.create_task(_watch_rule_changes())
 
     yield
 
     log.info("processor.stopping")
-    for task in (_processing_task, _log_task):
+    for task in (_processing_task, _log_task, _rule_watch_task):
         if task is not None:
             task.cancel()
             try:

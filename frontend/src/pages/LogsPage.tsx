@@ -17,6 +17,7 @@ import {
 import { GET_LOGS } from '@/graphql/logs';
 import { GET_SERVERS } from '@/graphql/queries';
 import { connectLogTail, type LogRecord } from '@/lib/sse';
+import { SavedFilterBar } from '@/components/filters/SavedFilterBar';
 
 interface LogItem {
   time: string;
@@ -229,6 +230,25 @@ export function LogsPage() {
             className="w-32 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/30"
           />
         </form>
+
+        <SavedFilterBar
+          scope="logs"
+          currentFilter={{
+            serverId,
+            serviceFilter,
+            levelFilter,
+            query: submittedQuery,
+          }}
+          onApply={(f) => {
+            if (typeof f.serverId === 'string') setServerId(f.serverId);
+            if (typeof f.serviceFilter === 'string') setServiceFilter(f.serviceFilter);
+            if (Array.isArray(f.levelFilter)) setLevelFilter(f.levelFilter as string[]);
+            if (typeof f.query === 'string') {
+              setSearchQuery(f.query);
+              setSubmittedQuery(f.query);
+            }
+          }}
+        />
 
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Level:</span>

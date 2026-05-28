@@ -166,6 +166,37 @@ async def init_storage() -> None:
             );
         """)
 
+        # Phase 4: dashboards + saved filters
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS dashboards (
+                id          TEXT PRIMARY KEY,
+                owner_id    TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                layout      JSONB NOT NULL DEFAULT '[]'::jsonb,
+                is_default  BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_dashboards_owner
+            ON dashboards (owner_id);
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS saved_filters (
+                id          TEXT PRIMARY KEY,
+                owner_id    TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                scope       TEXT NOT NULL,
+                filter      JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_saved_filters_owner_scope
+            ON saved_filters (owner_id, scope);
+        """)
+
         # Create logs hypertable for log pipeline
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS logs (

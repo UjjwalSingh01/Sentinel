@@ -80,3 +80,10 @@ async def set_ai_cache(incident_id: str, analysis: str, ttl: int = 900) -> None:
     """Cache AI analysis in Redis with TTL."""
     r = get_redis()
     await r.setex(f"ai:incident:{incident_id}", ttl, analysis)
+
+
+async def publish_rules_changed(rule_id: str, action: str) -> None:
+    """Notify the processor that its rule set must be reloaded."""
+    r = get_redis()
+    await r.publish("alert_rules.changed", json.dumps({"rule_id": rule_id, "action": action}))
+    log.info("redis.alert_rules.changed", rule_id=rule_id, action=action)

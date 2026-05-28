@@ -12,13 +12,16 @@ import json
 import base64
 
 from ..db.database import async_session, get_raw_pool
-from ..db.models import Incident, User
+from ..db.models import AlertRule, Dashboard, Incident, SavedFilter, User
 from ..services.redis_service import get_all_server_states
 from .types import (
+    AlertRuleType,
+    DashboardType,
     IncidentType,
     LogConnection,
     LogType,
     MetricPointType,
+    SavedFilterType,
     ServerType,
     SpanType,
     TraceType,
@@ -39,6 +42,29 @@ def _user_to_type(user: Optional[User]) -> Optional[UserType]:
         name=user.name,
         role=user.role,
         created_at=user.created_at,
+    )
+
+
+def _dashboard_to_type(d: Dashboard) -> DashboardType:
+    return DashboardType(
+        id=d.id,
+        owner_id=d.owner_id,
+        name=d.name,
+        layout=json.dumps(d.layout or []),
+        is_default=d.is_default,
+        created_at=d.created_at,
+        updated_at=d.updated_at,
+    )
+
+
+def _saved_filter_to_type(f: SavedFilter) -> SavedFilterType:
+    return SavedFilterType(
+        id=f.id,
+        owner_id=f.owner_id,
+        name=f.name,
+        scope=f.scope,
+        filter=json.dumps(f.filter or {}),
+        created_at=f.created_at,
     )
 
 
@@ -222,6 +248,59 @@ class Query:
                 )
                 for u in users
             ]
+
+    # ---------- Phase 4: rules / dashboards / saved filters ----------
+    @strawberry.field
+    async def alert_rules(self) -> list[AlertRuleType]:
+        """All alert rules (enabled + disabled), newest first."""
+        async with async_session() as session:
+            result = await session.execute(
+                select(AlertRule).order_by(AlertRule.updated_at.desc())
+            )
+            rules = result.scalars().all()
+            return [
+                AlertRuleType(
+                    id=r.id,
+                    name=r.name,
+                    type=r.type,
+                    severity=r.severity,
+                    expression=json.dumps(r.expression),
+                    enabled=r.enabled,
+                    runbook_url=r.runbook_url,
+                    created_by=r.created_by,
+                    created_at=r.created_at,
+                    updated_at=r.updated_at,
+                )
+                for r in rules
+            ]
+
+    @strawberry.field
+    async def dashboards(self) -> list[DashboardType]:
+        async with async_session() as session:
+            result = await session.execute(
+                select(Dashboard).order_by(Dashboard.updated_at.desc())
+            )
+            rows = result.scalars().all()
+            return [_dashboard_to_type(d) for d in rows]
+
+    @strawberry.field
+    async def dashboard(self, id: str) -> Optional[DashboardType]:
+        async with async_session() as session:
+            result = await session.execute(
+                select(Dashboard).where(Dashboard.id == id)
+            )
+            d = result.scalar_one_or_none()
+            return _dashboard_to_type(d) if d else None
+
+    @strawberry.field
+    async def saved_filters(self, scope: Optional[str] = None) -> list[SavedFilterType]:
+        async with async_session() as session:
+            query = select(SavedFilter).order_by(SavedFilter.created_at.desc())
+            if scope:
+                query = query.where(SavedFilter.scope == scope)
+            result = await session.execute(query)
+            rows = result.scalars().all()
+            return [_saved_filter_to_type(f) for f in rows]
 
     @strawberry.field
     async def incident_children(self, parent_id: str) -> list[IncidentType]:
