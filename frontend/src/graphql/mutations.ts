@@ -1,11 +1,12 @@
 import { gql } from '@apollo/client/core';
 
 export const ACKNOWLEDGE_INCIDENT = gql`
-  mutation AcknowledgeIncident($id: String!) {
-    acknowledgeIncident(id: $id) {
+  mutation AcknowledgeIncident($id: String!, $userId: String) {
+    acknowledgeIncident(id: $id, userId: $userId) {
       id
       status
       acknowledgedAt
+      acknowledgedBy
     }
   }
 `;

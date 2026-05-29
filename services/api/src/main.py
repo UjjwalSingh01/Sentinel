@@ -248,6 +248,40 @@ async def _ensure_schema() -> None:
             ON saved_filters (owner_id, scope);
         """)
 
+        # Phase 5: on-call schedule + notification log + acknowledged_by
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS acknowledged_by TEXT;
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS on_call_schedule (
+                id          TEXT PRIMARY KEY,
+                user_id     TEXT NOT NULL,
+                starts_at   TIMESTAMPTZ NOT NULL,
+                ends_at     TIMESTAMPTZ NOT NULL,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_on_call_window
+            ON on_call_schedule (starts_at, ends_at);
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS notification_log (
+                id          TEXT PRIMARY KEY,
+                incident_id TEXT NOT NULL,
+                channel     TEXT NOT NULL,
+                recipient   TEXT NOT NULL,
+                template    TEXT NOT NULL,
+                sent_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                payload     JSONB
+            );
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_notification_log_incident
+            ON notification_log (incident_id, sent_at DESC);
+        """)
+
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS logs (
                 time        TIMESTAMPTZ NOT NULL,

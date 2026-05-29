@@ -111,6 +111,40 @@ services:
       retries: 10
       start_period: 30s
 
+  notification:
+    build:
+      context: ./services/notification
+      dockerfile: Dockerfile
+    container_name: sentinel-notification
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      EMAIL_DRIVER: ${EMAIL_DRIVER}
+      DEFAULT_ON_CALL_EMAIL: ${DEFAULT_ON_CALL_EMAIL}
+      ADMIN_EMAIL_FALLBACK: ${ADMIN_EMAIL_FALLBACK}
+      ESCALATION_SECONDS: ${ESCALATION_SECONDS}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USERNAME: ${SMTP_USERNAME}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM: ${SMTP_FROM}
+      SMTP_USE_TLS: ${SMTP_USE_TLS}
+      LOG_LEVEL: ${LOG_LEVEL}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sentinel-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   processor:
     build:
       context: ./services/processor

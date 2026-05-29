@@ -12,6 +12,7 @@ import { LogsPage } from '@/pages/LogsPage';
 import { RulesPage } from '@/pages/RulesPage';
 import { DashboardsPage } from '@/pages/DashboardsPage';
 import { DashboardEditPage } from '@/pages/DashboardEditPage';
+import { OnCallAdminPage } from '@/pages/OnCallAdminPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated()) {
@@ -40,6 +41,7 @@ export default function App() {
             <Route path="/rules" element={<RulesPage />} />
             <Route path="/dashboards" element={<DashboardsPage />} />
             <Route path="/dashboards/:id" element={<DashboardEditPage />} />
+            <Route path="/admin/on-call" element={<OnCallAdminPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, AlertTriangle, LogOut, Shield, Activity, Terminal, Settings, LayoutGrid } from 'lucide-react';
+import { LayoutDashboard, AlertTriangle, LogOut, Shield, Activity, Terminal, Settings, LayoutGrid, Phone } from 'lucide-react';
 import { logout, getUser } from '@/lib/auth';
 
 export function Sidebar() {
@@ -18,6 +18,10 @@ export function Sidebar() {
     { to: '/dashboards', label: 'Dashboards', icon: LayoutGrid },
     { to: '/rules', label: 'Rules', icon: Settings },
   ];
+
+  const adminNavItems = user?.role === 'admin'
+    ? [{ to: '/admin/on-call', label: 'On-Call', icon: Phone }]
+    : [];
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-64 glass-strong border-r border-zinc-800 flex flex-col z-40">
@@ -62,6 +66,29 @@ export function Sidebar() {
             {item.label}
           </NavLink>
         ))}
+        {adminNavItems.length > 0 && (
+          <>
+            <div className="px-3 pt-4 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground/70">
+              Admin
+            </div>
+            {adminNavItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
+                    isActive
+                      ? 'bg-emerald-500/10 text-emerald-400'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-zinc-800'
+                  }`
+                }
+              >
+                <item.icon size={18} />
+                {item.label}
+              </NavLink>
+            ))}
+          </>
+        )}
       </nav>
 
       {/* User */}

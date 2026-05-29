@@ -12,7 +12,15 @@ import json
 import base64
 
 from ..db.database import async_session, get_raw_pool
-from ..db.models import AlertRule, Dashboard, Incident, SavedFilter, User
+from ..db.models import (
+    AlertRule,
+    Dashboard,
+    Incident,
+    NotificationLogEntry,
+    OnCallEntry,
+    SavedFilter,
+    User,
+)
 from ..services.redis_service import get_all_server_states
 from .types import (
     AlertRuleType,
@@ -21,6 +29,8 @@ from .types import (
     LogConnection,
     LogType,
     MetricPointType,
+    NotificationLogEntryType,
+    OnCallEntryType,
     SavedFilterType,
     ServerType,
     SpanType,
@@ -87,6 +97,7 @@ def _incident_to_type(
         assignee=assignee,
         created_at=inc.created_at,
         acknowledged_at=inc.acknowledged_at,
+        acknowledged_by=inc.acknowledged_by,
         resolved_at=inc.resolved_at,
         log_context=json.dumps(inc.log_context) if inc.log_context else None,
         rule_id=inc.rule_id,
@@ -291,6 +302,88 @@ class Query:
             )
             d = result.scalar_one_or_none()
             return _dashboard_to_type(d) if d else None
+
+    @strawberry.field
+    async def on_call_schedule(self) -> list[OnCallEntryType]:
+        async with async_session() as session:
+            result = await session.execute(
+                select(OnCallEntry).order_by(OnCallEntry.starts_at.desc())
+            )
+            rows = result.scalars().all()
+            user_ids = {r.user_id for r in rows}
+            users_by_id: dict[str, User] = {}
+            if user_ids:
+                u_result = await session.execute(
+                    select(User).where(User.id.in_(user_ids))
+                )
+                users_by_id = {u.id: u for u in u_result.scalars().all()}
+            return [
+                OnCallEntryType(
+                    id=e.id,
+                    user_id=e.user_id,
+                    user=_user_to_type(users_by_id.get(e.user_id)),
+                    starts_at=e.starts_at,
+                    ends_at=e.ends_at,
+                    created_at=e.created_at,
+                )
+                for e in rows
+            ]
+
+    @strawberry.field
+    async def current_on_call(self) -> Optional[OnCallEntryType]:
+        """Return the on-call entry covering NOW(), or None if nobody is on-call."""
+        pool = await get_raw_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, user_id, starts_at, ends_at, created_at
+                FROM on_call_schedule
+                WHERE NOW() BETWEEN starts_at AND ends_at
+                ORDER BY starts_at DESC
+                LIMIT 1
+                """
+            )
+        if row is None:
+            return None
+        async with async_session() as session:
+            user_result = await session.execute(
+                select(User).where(User.id == row["user_id"])
+            )
+            user = _user_to_type(user_result.scalar_one_or_none())
+        return OnCallEntryType(
+            id=row["id"],
+            user_id=row["user_id"],
+            user=user,
+            starts_at=row["starts_at"],
+            ends_at=row["ends_at"],
+            created_at=row["created_at"],
+        )
+
+    @strawberry.field
+    async def notification_log(
+        self, incident_id: Optional[str] = None, limit: int = 50
+    ) -> list[NotificationLogEntryType]:
+        limit = max(1, min(limit, 500))
+        async with async_session() as session:
+            query = select(NotificationLogEntry).order_by(
+                NotificationLogEntry.sent_at.desc()
+            ).limit(limit)
+            if incident_id is not None:
+                query = query.where(NotificationLogEntry.incident_id == incident_id)
+            result = await session.execute(query)
+            rows = result.scalars().all()
+            return [
+                NotificationLogEntryType(
+                    id=r.id,
+                    incident_id=r.incident_id,
+                    channel=r.channel,
+                    recipient=r.recipient,
+                    template=r.template,
+                    sent_at=r.sent_at,
+                    payload=json.dumps(r.payload) if r.payload else None,
+                )
+                for r in rows
+            ]
 
     @strawberry.field
     async def saved_filters(self, scope: Optional[str] = None) -> list[SavedFilterType]:

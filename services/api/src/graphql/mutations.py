@@ -12,14 +12,26 @@ import structlog
 from sqlalchemy import select
 
 from ..db.database import async_session
-from ..db.models import AlertRule, Dashboard, Incident, SavedFilter, User
+from ..db.models import (
+    AlertRule,
+    Dashboard,
+    Incident,
+    OnCallEntry,
+    SavedFilter,
+    User,
+)
 from ..services.ai_service import analyze_incident
-from ..services.redis_service import publish_incident_update, publish_rules_changed
+from ..services.redis_service import (
+    publish_incident_acknowledged,
+    publish_incident_update,
+    publish_rules_changed,
+)
 from .types import (
     AiAnalysisType,
     AlertRuleType,
     DashboardType,
     IncidentType,
+    OnCallEntryType,
     SavedFilterType,
     UserType,
 )
@@ -32,8 +44,10 @@ class Mutation:
     """Root GraphQL mutation type."""
 
     @strawberry.mutation
-    async def acknowledge_incident(self, id: str) -> IncidentType:
-        """Acknowledge an incident."""
+    async def acknowledge_incident(
+        self, id: str, user_id: Optional[str] = None
+    ) -> IncidentType:
+        """Acknowledge an incident. Cancels the pending admin escalation."""
         async with async_session() as session:
             result = await session.execute(
                 select(Incident).where(Incident.id == id)
@@ -44,18 +58,21 @@ class Mutation:
 
             inc.status = "acknowledged"
             inc.acknowledged_at = datetime.now(timezone.utc)
+            inc.acknowledged_by = user_id
             await session.commit()
             await session.refresh(inc)
 
-            # Publish update via Redis
             await publish_incident_update({
                 "id": inc.id,
                 "server_id": inc.server_id,
                 "status": inc.status,
                 "acknowledged_at": inc.acknowledged_at.isoformat() if inc.acknowledged_at else None,
+                "acknowledged_by": user_id,
             })
+            # Tell the notification service to cancel the escalation timer.
+            await publish_incident_acknowledged(inc.id, user_id)
 
-            log.info("incident.acknowledged", incident_id=id)
+            log.info("incident.acknowledged", incident_id=id, user_id=user_id)
             return await _to_incident_type(inc, session)
 
     @strawberry.mutation
@@ -365,6 +382,57 @@ class Mutation:
         log.info("saved_filter.deleted", filter_id=id)
         return True
 
+    # ---------- Phase 5: on-call schedule CRUD ----------
+    @strawberry.mutation
+    async def create_on_call_entry(
+        self,
+        user_id: str,
+        starts_at: datetime,
+        ends_at: datetime,
+    ) -> OnCallEntryType:
+        if ends_at <= starts_at:
+            raise ValueError("ends_at must be after starts_at")
+        async with async_session() as session:
+            user = await session.get(User, user_id)
+            if user is None:
+                raise ValueError(f"User {user_id} not found")
+            entry = OnCallEntry(
+                id=str(uuid.uuid4()),
+                user_id=user_id,
+                starts_at=starts_at,
+                ends_at=ends_at,
+            )
+            session.add(entry)
+            await session.commit()
+            await session.refresh(entry)
+            user_t = UserType(
+                id=user.id,
+                email=user.email,
+                name=user.name,
+                role=user.role,
+                created_at=user.created_at,
+            )
+        log.info("on_call.created", entry_id=entry.id, user_id=user_id)
+        return OnCallEntryType(
+            id=entry.id,
+            user_id=entry.user_id,
+            user=user_t,
+            starts_at=entry.starts_at,
+            ends_at=entry.ends_at,
+            created_at=entry.created_at,
+        )
+
+    @strawberry.mutation
+    async def delete_on_call_entry(self, id: str) -> bool:
+        async with async_session() as session:
+            entry = await session.get(OnCallEntry, id)
+            if entry is None:
+                return False
+            await session.delete(entry)
+            await session.commit()
+        log.info("on_call.deleted", entry_id=id)
+        return True
+
 
 def _to_alert_rule_type(rule: AlertRule) -> AlertRuleType:
     return AlertRuleType(
@@ -438,6 +506,7 @@ async def _to_incident_type(inc: Incident, session: object) -> IncidentType:
         assignee=assignee,
         created_at=inc.created_at,
         acknowledged_at=inc.acknowledged_at,
+        acknowledged_by=inc.acknowledged_by,
         resolved_at=inc.resolved_at,
         log_context=json.dumps(inc.log_context) if inc.log_context else None,
         rule_id=inc.rule_id,

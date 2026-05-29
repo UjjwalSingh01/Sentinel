@@ -87,3 +87,13 @@ async def publish_rules_changed(rule_id: str, action: str) -> None:
     r = get_redis()
     await r.publish("alert_rules.changed", json.dumps({"rule_id": rule_id, "action": action}))
     log.info("redis.alert_rules.changed", rule_id=rule_id, action=action)
+
+
+async def publish_incident_acknowledged(incident_id: str, user_id: str | None) -> None:
+    """Tell the notification service to cancel its pending escalation timer."""
+    r = get_redis()
+    await r.publish(
+        "incidents.acknowledged",
+        json.dumps({"id": incident_id, "user_id": user_id}),
+    )
+    log.info("redis.incident.acknowledged", incident_id=incident_id, user_id=user_id)

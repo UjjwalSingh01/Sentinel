@@ -58,6 +58,7 @@ class IncidentType:
     assignee: Optional[UserType] = None
     created_at: datetime
     acknowledged_at: Optional[datetime] = None
+    acknowledged_by: Optional[str] = None
     resolved_at: Optional[datetime] = None
     # JSON-encoded snapshot of correlated logs at incident time.
     # Frontend parses via JSON.parse(). null when no logs were captured.
@@ -173,3 +174,29 @@ class SavedFilterType:
     # JSON-encoded filter state.
     filter: str
     created_at: datetime
+
+
+@strawberry.type
+class OnCallEntryType:
+    """One slot on the on-call rotation."""
+
+    id: str
+    user_id: str
+    user: Optional[UserType] = None
+    starts_at: datetime
+    ends_at: datetime
+    created_at: datetime
+
+
+@strawberry.type
+class NotificationLogEntryType:
+    """One outbound notification recorded by the notification service."""
+
+    id: str
+    incident_id: str
+    channel: str
+    recipient: str
+    template: str
+    sent_at: datetime
+    # JSON-encoded payload metadata (subject, severity, etc).
+    payload: Optional[str] = None

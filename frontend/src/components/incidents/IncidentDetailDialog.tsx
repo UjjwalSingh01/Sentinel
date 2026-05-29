@@ -19,6 +19,7 @@ import {
 import { ACKNOWLEDGE_INCIDENT, RESOLVE_INCIDENT, ASSIGN_INCIDENT, REQUEST_AI_ANALYSIS } from '@/graphql/mutations';
 import { GET_INCIDENT, GET_USERS } from '@/graphql/queries';
 import { GET_INCIDENT_CHILDREN } from '@/graphql/traces';
+import { getUser } from '@/lib/auth';
 import { TracesPanel } from './TracesPanel';
 
 interface IncidentDetailDialogProps {
@@ -83,7 +84,10 @@ export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDial
   if (!incidentId) return null;
 
   const handleAcknowledge = async () => {
-    await acknowledgeIncident({ variables: { id: incidentId } });
+    const currentUser = getUser();
+    await acknowledgeIncident({
+      variables: { id: incidentId, userId: currentUser?.user_id },
+    });
     refetch();
   };
 
