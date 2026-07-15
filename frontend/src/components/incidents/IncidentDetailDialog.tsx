@@ -1,25 +1,34 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery } from '@apollo/client/react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
-  X,
-  AlertTriangle,
-  AlertOctagon,
-  CheckCircle,
-  Clock,
-  User,
-  Sparkles,
-  Loader2,
-  Server,
-  Terminal,
+  CheckCircle2,
   ExternalLink,
   GitBranch,
   Layers,
+  Sparkles,
+  Terminal,
 } from 'lucide-react';
-import { ACKNOWLEDGE_INCIDENT, RESOLVE_INCIDENT, ASSIGN_INCIDENT, REQUEST_AI_ANALYSIS } from '@/graphql/mutations';
+import {
+  ACKNOWLEDGE_INCIDENT,
+  ASSIGN_INCIDENT,
+  REQUEST_AI_ANALYSIS,
+  RESOLVE_INCIDENT,
+} from '@/graphql/mutations';
 import { GET_INCIDENT, GET_USERS } from '@/graphql/queries';
 import { GET_INCIDENT_CHILDREN } from '@/graphql/traces';
 import { getUser } from '@/lib/auth';
+import {
+  LEVEL,
+  levelForIncidentStatus,
+  levelForLogLevel,
+  levelForSeverity,
+  type Level,
+} from '@/lib/status';
+import { formatDateTime, timeAgo } from '@/lib/format';
+import { Button, Skeleton, StatusBadge, Tabs } from '@/components/ui';
+import { Modal } from '@/components/ui/Modal';
 import { TracesPanel } from './TracesPanel';
 
 interface IncidentDetailDialogProps {
@@ -27,81 +36,49 @@ interface IncidentDetailDialogProps {
   onClose: () => void;
 }
 
-type CorrelatedTab = 'logs' | 'traces' | 'children';
+type EvidenceTab = 'logs' | 'traces' | 'related';
+
+interface LogContext {
+  total_lines?: number;
+  templates?: Array<{ template: string; count: number; level: string; samples?: string[] }>;
+}
 
 export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDialogProps) {
   const [aiLoading, setAiLoading] = useState(false);
-  const [correlatedTab, setCorrelatedTab] = useState<CorrelatedTab>('logs');
+  const [tab, setTab] = useState<EvidenceTab>('logs');
 
-  const { data: incidentData, loading, refetch } = useQuery(GET_INCIDENT, {
+  const { data, loading, refetch } = useQuery(GET_INCIDENT, {
     variables: { id: incidentId },
     skip: !incidentId,
   });
-
   const { data: usersData } = useQuery(GET_USERS);
   const { data: childrenData } = useQuery(GET_INCIDENT_CHILDREN, {
     variables: { parentId: incidentId },
     skip: !incidentId,
   });
-  const childIncidents: Array<{
-    id: string;
-    serverId: string;
-    severity: string;
-    message: string;
-    createdAt: string;
-    ruleName?: string | null;
-  }> = (childrenData as any)?.incidentChildren || [];
 
   const [acknowledgeIncident] = useMutation(ACKNOWLEDGE_INCIDENT);
   const [resolveIncident] = useMutation(RESOLVE_INCIDENT);
   const [assignIncident] = useMutation(ASSIGN_INCIDENT);
   const [requestAiAnalysis] = useMutation(REQUEST_AI_ANALYSIS);
 
-  const incident = (incidentData as any)?.incident;
-  const users = (usersData as any)?.users || [];
+  const incident = (data as any)?.incident;
+  const users: { id: string; name: string; email: string }[] = (usersData as any)?.users ?? [];
+  const children: any[] = (childrenData as any)?.incidentChildren ?? [];
 
-  // log_context is a JSON string from the API; parse defensively.
-  // Hook must run unconditionally — keep it above any early return.
-  const logContext = useMemo(() => {
+  const logContext = useMemo<LogContext | null>(() => {
     if (!incident?.logContext) return null;
     try {
-      return JSON.parse(incident.logContext) as {
-        window_start?: string;
-        window_end?: string;
-        total_lines?: number;
-        templates?: Array<{
-          template: string;
-          count: number;
-          level: string;
-          samples?: string[];
-        }>;
-      };
+      return JSON.parse(incident.logContext);
     } catch {
       return null;
     }
   }, [incident?.logContext]);
 
-  if (!incidentId) return null;
+  const sev = incident ? levelForSeverity(incident.severity) : 'warn';
+  const SeverityIcon = LEVEL[sev].icon;
 
-  const handleAcknowledge = async () => {
-    const currentUser = getUser();
-    await acknowledgeIncident({
-      variables: { id: incidentId, userId: currentUser?.user_id },
-    });
-    refetch();
-  };
-
-  const handleResolve = async () => {
-    await resolveIncident({ variables: { id: incidentId } });
-    refetch();
-  };
-
-  const handleAssign = async (userId: string) => {
-    await assignIncident({ variables: { id: incidentId, userId } });
-    refetch();
-  };
-
-  const handleRequestAnalysis = async () => {
+  const handleAnalysis = async () => {
     setAiLoading(true);
     try {
       await requestAiAnalysis({ variables: { id: incidentId } });
@@ -111,334 +88,299 @@ export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDial
     }
   };
 
-  const severityIcon = incident?.severity === 'critical' ? AlertOctagon : AlertTriangle;
-  const SeverityIcon = severityIcon;
+  const timeline: { label: string; at: string; level: Level }[] = [];
+  if (incident) {
+    timeline.push({ label: 'Fired', at: incident.createdAt, level: sev });
+    if (incident.acknowledgedAt) {
+      timeline.push({ label: 'Acknowledged', at: incident.acknowledgedAt, level: 'warn' });
+    }
+    if (incident.resolvedAt) {
+      timeline.push({ label: 'Resolved', at: incident.resolvedAt, level: 'good' });
+    }
+  }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-
-      {/* Dialog */}
-      <div className="relative glass-strong rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-slide-up">
-        {/* Header */}
-        <div className="sticky top-0 glass-strong rounded-t-2xl border-b border-zinc-800 p-5 flex items-center justify-between z-10">
-          <div className="flex items-center gap-3">
-            {incident && (
-              <div className={`p-2 rounded-lg ${
-                incident.severity === 'critical' ? 'bg-red-500/10' : 'bg-amber-500/10'
-              }`}>
-                <SeverityIcon size={20} className={
-                  incident.severity === 'critical' ? 'text-red-400' : 'text-amber-400'
-                } />
-              </div>
-            )}
-            <div>
-              <h2 className="text-lg font-semibold">Incident Detail</h2>
-              {incident && (
-                <p className="text-xs text-muted-foreground font-mono">{incident.id.slice(0, 8)}</p>
-              )}
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-lg hover:bg-zinc-800 transition-colors"
+    <Modal
+      open={Boolean(incidentId)}
+      onClose={onClose}
+      size="lg"
+      title={loading || !incident ? 'Incident' : incident.ruleName || incident.message}
+      subtitle={incident ? `${incident.serverId} · ${incident.id.slice(0, 8)}` : undefined}
+      leading={
+        incident && (
+          <div
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-md"
+            style={{ background: LEVEL[sev].tint, color: LEVEL[sev].text }}
           >
-            <X size={18} />
-          </button>
-        </div>
-
-        {loading ? (
-          <div className="p-12 flex items-center justify-center">
-            <Loader2 size={24} className="animate-spin text-muted-foreground" />
+            <SeverityIcon size={16} />
           </div>
-        ) : incident ? (
-          <div className="p-5 space-y-5">
-            {/* Status & Severity */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-zinc-900 rounded-lg p-3">
-                <p className="text-xs text-muted-foreground mb-1">Severity</p>
-                <span className={`text-sm font-semibold px-2 py-1 rounded ${
-                  incident.severity === 'critical'
-                    ? 'bg-red-500/20 text-red-400'
-                    : 'bg-amber-500/20 text-amber-400'
-                }`}>
-                  {incident.severity.toUpperCase()}
-                </span>
-              </div>
-              <div className="bg-zinc-900 rounded-lg p-3">
-                <p className="text-xs text-muted-foreground mb-1">Status</p>
-                <span className={`text-sm font-semibold px-2 py-1 rounded ${
-                  incident.status === 'open'
-                    ? 'bg-red-500/10 text-red-400'
-                    : incident.status === 'acknowledged'
-                    ? 'bg-amber-500/10 text-amber-400'
-                    : 'bg-emerald-500/10 text-emerald-400'
-                }`}>
-                  {incident.status.toUpperCase()}
-                </span>
-              </div>
-            </div>
-
-            {/* Details */}
-            <div className="bg-zinc-900 rounded-lg p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <Server size={14} className="text-muted-foreground" />
-                <span className="text-xs text-muted-foreground">Server:</span>
-                <span className="text-sm font-mono">{incident.serverId}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <AlertTriangle size={14} className="text-muted-foreground" />
-                <span className="text-xs text-muted-foreground">Metric:</span>
-                <span className="text-sm">{incident.metricType}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground ml-5">Value:</span>
-                <span className="text-sm font-mono text-red-400">{incident.currentValue.toFixed(2)}</span>
-                <span className="text-xs text-muted-foreground">/ threshold:</span>
-                <span className="text-sm font-mono">{incident.threshold}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Clock size={14} className="text-muted-foreground" />
-                <span className="text-xs text-muted-foreground">Created:</span>
-                <span className="text-sm">{new Date(incident.createdAt).toLocaleString()}</span>
-              </div>
-              {incident.acknowledgedAt && (
-                <div className="flex items-center gap-2">
-                  <CheckCircle size={14} className="text-amber-400" />
-                  <span className="text-xs text-muted-foreground">Acknowledged:</span>
-                  <span className="text-sm">{new Date(incident.acknowledgedAt).toLocaleString()}</span>
-                </div>
-              )}
-              {incident.resolvedAt && (
-                <div className="flex items-center gap-2">
-                  <CheckCircle size={14} className="text-emerald-400" />
-                  <span className="text-xs text-muted-foreground">Resolved:</span>
-                  <span className="text-sm">{new Date(incident.resolvedAt).toLocaleString()}</span>
-                </div>
-              )}
-              <div className="pt-2">
-                <p className="text-sm text-foreground/80">{incident.message}</p>
-              </div>
-            </div>
-
-            {/* Assignee */}
-            <div className="bg-zinc-900 rounded-lg p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <User size={14} className="text-muted-foreground" />
-                <span className="text-xs text-muted-foreground">Assigned to:</span>
-                {incident.assignee ? (
-                  <span className="text-sm">{incident.assignee.name}</span>
-                ) : (
-                  <span className="text-sm text-muted-foreground italic">Unassigned</span>
-                )}
-              </div>
-              <select
-                value={incident.assigneeId || ''}
-                onChange={(e) => e.target.value && handleAssign(e.target.value)}
-                className="w-full mt-2 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+        )
+      }
+      footer={
+        incident && incident.status !== 'resolved' ? (
+          <div className="flex justify-end gap-2">
+            {incident.status === 'open' && (
+              <Button
+                icon={CheckCircle2}
+                onClick={async () => {
+                  await acknowledgeIncident({
+                    variables: { id: incidentId, userId: getUser()?.user_id },
+                  });
+                  refetch();
+                }}
               >
-                <option value="">Select assignee...</option>
-                {users.map((user: { id: string; name: string; email: string }) => (
-                  <option key={user.id} value={user.id}>
-                    {user.name} ({user.email})
-                  </option>
-                ))}
-              </select>
-            </div>
+                Acknowledge
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              icon={CheckCircle2}
+              onClick={async () => {
+                await resolveIncident({ variables: { id: incidentId } });
+                refetch();
+              }}
+            >
+              Resolve
+            </Button>
+          </div>
+        ) : null
+      }
+    >
+      {loading || !incident ? (
+        <div className="space-y-3 p-5">
+          <Skeleton className="h-16" />
+          <Skeleton className="h-32" />
+          <Skeleton className="h-24" />
+        </div>
+      ) : (
+        <div className="space-y-5 p-5">
+          {/* The breach, stated once, in numbers. */}
+          <div className="grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-line bg-line">
+            <Cell label="Severity">
+              <StatusBadge level={sev}>{incident.severity}</StatusBadge>
+            </Cell>
+            <Cell label="Status">
+              <StatusBadge level={levelForIncidentStatus(incident.status)}>
+                {incident.status}
+              </StatusBadge>
+            </Cell>
+            <Cell label={`${incident.metricType} value`}>
+              <span className="font-mono text-[13px] tabular-nums" style={{ color: LEVEL[sev].text }}>
+                {incident.currentValue.toFixed(1)}
+              </span>
+              <span className="font-mono text-[11px] text-ink-subtle">
+                {' '}
+                / {incident.threshold}
+              </span>
+            </Cell>
+          </div>
 
-            {/* Correlated evidence tabs: logs / traces / children */}
-            <div className="bg-zinc-900 rounded-lg p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setCorrelatedTab('logs')}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                      correlatedTab === 'logs'
-                        ? 'bg-zinc-800 text-emerald-400'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    <Terminal size={12} />
-                    Logs
-                    {logContext?.total_lines ? (
-                      <span className="opacity-60 text-[10px]">{logContext.total_lines}</span>
-                    ) : null}
-                  </button>
-                  <button
-                    onClick={() => setCorrelatedTab('traces')}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                      correlatedTab === 'traces'
-                        ? 'bg-zinc-800 text-emerald-400'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    <GitBranch size={12} />
-                    Traces
-                    {incident.exemplarTraceIds?.length ? (
-                      <span className="opacity-60 text-[10px]">{incident.exemplarTraceIds.length}</span>
-                    ) : null}
-                  </button>
-                  {incident.childCount > 0 && (
-                    <button
-                      onClick={() => setCorrelatedTab('children')}
-                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                        correlatedTab === 'children'
-                          ? 'bg-zinc-800 text-emerald-400'
-                          : 'text-muted-foreground hover:text-foreground'
-                      }`}
-                    >
-                      <Layers size={12} />
-                      Related
-                      <span className="opacity-60 text-[10px]">{incident.childCount}</span>
-                    </button>
-                  )}
-                </div>
-                {correlatedTab === 'logs' && (
-                  <Link
-                    to={`/logs?serverId=${encodeURIComponent(incident.serverId)}`}
-                    className="text-[11px] text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1"
-                  >
-                    Open in Logs <ExternalLink size={11} />
-                  </Link>
-                )}
+          {/* Lifecycle. A horizontal walk of what happened, and when. */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-2 rounded-lg border border-line bg-card px-4 py-3">
+            {timeline.map((step, i) => (
+              <div key={step.label} className="flex items-center gap-2">
+                {i > 0 && <span className="mx-1 h-px w-6 bg-line-strong" />}
+                <span
+                  className="h-1.5 w-1.5 shrink-0 rounded-full"
+                  style={{ background: LEVEL[step.level].mark }}
+                />
+                <span className="text-[12px] font-medium text-ink">{step.label}</span>
+                <span
+                  className="font-mono text-[11px] text-ink-subtle"
+                  title={formatDateTime(step.at)}
+                >
+                  {timeAgo(step.at)}
+                </span>
               </div>
+            ))}
+          </div>
 
-              {correlatedTab === 'logs' && (
-                logContext && logContext.templates && logContext.templates.length > 0 ? (
-                  <div className="space-y-1.5">
-                    {logContext.templates.slice(0, 8).map((t, i) => (
-                      <div key={i} className="bg-zinc-800/60 rounded p-2 font-mono text-[11px]">
-                        <div className="flex items-start gap-2">
-                          <span
-                            className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                              t.level === 'FATAL' || t.level === 'ERROR'
-                                ? 'bg-red-500/20 text-red-400'
-                                : t.level === 'WARN' || t.level === 'WARNING'
-                                ? 'bg-amber-500/20 text-amber-400'
-                                : 'bg-zinc-700 text-zinc-300'
-                            }`}
+          <Section title="Assignee">
+            <select
+              value={incident.assigneeId ?? ''}
+              onChange={(e) => e.target.value && assignIncident({
+                variables: { id: incidentId, userId: e.target.value },
+              }).then(() => refetch())}
+              className="field"
+            >
+              <option value="">Unassigned</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name} — {u.email}
+                </option>
+              ))}
+            </select>
+          </Section>
+
+          {/* Evidence. The whole reason this product exists: the incident arrives
+              with its own logs and traces already attached. */}
+          <Section
+            title="Evidence"
+            action={
+              tab === 'logs' && (
+                <Link
+                  to={`/logs?serverId=${encodeURIComponent(incident.serverId)}`}
+                  className="inline-flex items-center gap-1 text-[11px] text-ink-muted transition-colors hover:text-ink"
+                >
+                  Open in Logs <ExternalLink size={10} />
+                </Link>
+              )
+            }
+          >
+            <Tabs
+              layoutId="evidence-tabs"
+              value={tab}
+              onChange={setTab}
+              items={[
+                { value: 'logs', label: 'Logs', icon: Terminal, count: logContext?.total_lines },
+                {
+                  value: 'traces',
+                  label: 'Traces',
+                  icon: GitBranch,
+                  count: incident.exemplarTraceIds?.length || undefined,
+                },
+                ...(incident.childCount > 0
+                  ? [{ value: 'related' as const, label: 'Related', icon: Layers, count: incident.childCount }]
+                  : []),
+              ]}
+            />
+
+            <div className="mt-3">
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={tab}
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.16 }}
+                >
+                  {tab === 'logs' &&
+                    (logContext?.templates?.length ? (
+                      <div className="space-y-1.5">
+                        {logContext.templates.slice(0, 8).map((t, i) => (
+                          <motion.div
+                            key={i}
+                            initial={{ opacity: 0, x: -4 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: i * 0.03 }}
+                            className="rounded-md border border-line bg-inset p-2.5"
                           >
-                            ×{t.count} {t.level}
-                          </span>
-                          <span className="text-foreground/80 break-all">{t.template}</span>
-                        </div>
-                        {t.samples && t.samples.length > 0 && (
-                          <div className="mt-1 ml-2 text-muted-foreground">
-                            {t.samples.slice(0, 2).map((s, j) => (
-                              <div key={j} className="truncate" title={s}>
-                                e.g. {s}
+                            <div className="flex items-start gap-2">
+                              <StatusBadge level={levelForLogLevel(t.level)} showIcon={false}>
+                                ×{t.count} {t.level}
+                              </StatusBadge>
+                              <span className="min-w-0 flex-1 font-mono text-[11px] break-all text-ink">
+                                {t.template}
+                              </span>
+                            </div>
+                            {t.samples?.slice(0, 2).map((s, j) => (
+                              <div
+                                key={j}
+                                title={s}
+                                className="mt-1 truncate pl-1 font-mono text-[10px] text-ink-subtle"
+                              >
+                                {s}
                               </div>
                             ))}
+                          </motion.div>
+                        ))}
+                      </div>
+                    ) : (
+                      <Muted>No log evidence was captured for this incident.</Muted>
+                    ))}
+
+                  {tab === 'traces' && incidentId && <TracesPanel incidentId={incidentId} />}
+
+                  {tab === 'related' &&
+                    (children.length > 0 ? (
+                      <div className="space-y-1.5">
+                        {children.map((c) => (
+                          <div
+                            key={c.id}
+                            className="flex items-center gap-2.5 rounded-md border border-line bg-inset p-2.5"
+                          >
+                            <StatusBadge level={levelForSeverity(c.severity)} showIcon={false}>
+                              {c.severity}
+                            </StatusBadge>
+                            <span className="shrink-0 font-mono text-[11px] text-ink">
+                              {c.serverId}
+                            </span>
+                            <span className="truncate text-[12px] text-ink-muted">{c.message}</span>
                           </div>
-                        )}
+                        ))}
                       </div>
+                    ) : (
+                      <Muted>No related child incidents.</Muted>
                     ))}
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground italic">
-                    No log evidence was captured for this incident.
-                  </p>
-                )
-              )}
-
-              {correlatedTab === 'traces' && (
-                incidentId ? <TracesPanel incidentId={incidentId} /> : null
-              )}
-
-              {correlatedTab === 'children' && (
-                childIncidents.length > 0 ? (
-                  <div className="space-y-1.5 text-[12px]">
-                    {childIncidents.map((c) => (
-                      <div
-                        key={c.id}
-                        className="bg-zinc-800/60 rounded p-2 flex items-center gap-3"
-                      >
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            c.severity === 'critical'
-                              ? 'bg-red-500/20 text-red-400'
-                              : 'bg-amber-500/20 text-amber-400'
-                          }`}
-                        >
-                          {c.severity.toUpperCase()}
-                        </span>
-                        <span className="font-mono text-xs text-muted-foreground shrink-0">
-                          {c.serverId}
-                        </span>
-                        <span className="truncate text-foreground/80">{c.message}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground italic">
-                    No related child incidents.
-                  </p>
-                )
-              )}
+                </motion.div>
+              </AnimatePresence>
             </div>
+          </Section>
 
-            {/* AI Analysis */}
-            <div className="bg-zinc-900 rounded-lg p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Sparkles size={14} className="text-emerald-400" />
-                <span className="text-sm font-semibold">AI Root-Cause Analysis</span>
-              </div>
-              {incident.aiAnalysis ? (
-                <div className="prose prose-invert prose-sm max-w-none">
-                  <pre className="whitespace-pre-wrap text-xs text-foreground/80 bg-zinc-800 rounded-lg p-3 overflow-auto max-h-64 font-mono leading-relaxed">
-                    {incident.aiAnalysis}
-                  </pre>
-                </div>
-              ) : (
-                <button
-                  onClick={handleRequestAnalysis}
-                  disabled={aiLoading}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors text-sm disabled:opacity-50"
-                >
-                  {aiLoading ? (
-                    <>
-                      <Loader2 size={14} className="animate-spin" />
-                      Analyzing...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles size={14} />
-                      Request AI Analysis
-                    </>
-                  )}
-                </button>
-              )}
-            </div>
-
-            {/* Actions */}
-            {incident.status !== 'resolved' && (
-              <div className="flex gap-3 pt-2">
-                {incident.status === 'open' && (
-                  <button
-                    onClick={handleAcknowledge}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 border border-amber-500/20 transition-colors text-sm font-medium"
-                  >
-                    <CheckCircle size={16} />
-                    Acknowledge
-                  </button>
-                )}
-                <button
-                  onClick={handleResolve}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 transition-colors text-sm font-medium"
-                >
-                  <CheckCircle size={16} />
-                  Resolve
-                </button>
+          <Section title="AI root-cause analysis">
+            {incident.aiAnalysis ? (
+              <motion.pre
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.4 }}
+                className="max-h-72 overflow-auto rounded-md border border-line bg-inset p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-ink-muted"
+              >
+                {incident.aiAnalysis}
+              </motion.pre>
+            ) : (
+              <div className="flex items-center gap-3">
+                <Button icon={Sparkles} onClick={handleAnalysis} loading={aiLoading}>
+                  {aiLoading ? 'Analysing…' : 'Request analysis'}
+                </Button>
+                <p className="text-[11px] text-ink-subtle">
+                  Sends this incident&apos;s metrics and captured logs to the model.
+                </p>
               </div>
             )}
-          </div>
-        ) : (
-          <div className="p-12 text-center text-muted-foreground">
-            <p>Incident not found</p>
-          </div>
-        )}
+          </Section>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/* --- Local layout bits --------------------------------------------------- */
+
+function Cell({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="bg-card px-3.5 py-3">
+      <div className="mb-1.5 truncate text-[10px] font-medium tracking-wider text-ink-subtle uppercase">
+        {label}
       </div>
+      {children}
     </div>
+  );
+}
+
+function Section({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <div className="mb-2.5 flex items-center justify-between gap-3">
+        <h3 className="text-[12px] font-semibold text-ink">{title}</h3>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Muted({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="rounded-md border border-dashed border-line px-3 py-6 text-center text-[12px] text-ink-subtle">
+      {children}
+    </p>
   );
 }

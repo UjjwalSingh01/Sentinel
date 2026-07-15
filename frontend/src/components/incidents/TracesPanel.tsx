@@ -1,6 +1,10 @@
 import { useQuery } from '@apollo/client/react';
-import { GitBranch, Loader2 } from 'lucide-react';
+import { motion } from 'motion/react';
+import { GitBranch } from 'lucide-react';
 import { GET_INCIDENT_TRACES } from '@/graphql/traces';
+import { LEVEL, SERIES } from '@/lib/status';
+import { formatDuration } from '@/lib/format';
+import { Skeleton } from '@/components/ui';
 
 interface Span {
   time: string;
@@ -12,7 +16,6 @@ interface Span {
   name: string;
   durationMs: number;
   status: string | null;
-  attributes: string | null;
 }
 
 interface Trace {
@@ -23,110 +26,124 @@ interface Trace {
   spans: Span[];
 }
 
-function statusColor(status: string | null): string {
-  if (!status) return 'bg-zinc-700';
-  if (status === 'OK') return 'bg-emerald-500/70';
-  return 'bg-red-500/70';
-}
-
-function orderSpansForWaterfall(spans: Span[]): Span[] {
+/** Depth-first, so a child always renders directly under its parent. */
+function flatten(spans: Span[]): { span: Span; depth: number }[] {
   const root = spans.find((s) => !s.parentSpanId);
-  if (!root) return spans;
+  if (!root) return spans.map((span) => ({ span, depth: 0 }));
+
   const byParent = new Map<string | null, Span[]>();
   for (const s of spans) {
-    const list = byParent.get(s.parentSpanId) ?? [];
-    list.push(s);
-    byParent.set(s.parentSpanId, list);
+    const siblings = byParent.get(s.parentSpanId) ?? [];
+    siblings.push(s);
+    byParent.set(s.parentSpanId, siblings);
   }
-  const out: Span[] = [];
-  const visit = (s: Span) => {
-    out.push(s);
-    const children = byParent.get(s.spanId) ?? [];
-    for (const c of children) visit(c);
+
+  const out: { span: Span; depth: number }[] = [];
+  const walk = (span: Span, depth: number) => {
+    out.push({ span, depth });
+    for (const child of byParent.get(span.spanId) ?? []) walk(child, depth + 1);
   };
-  visit(root);
+  walk(root, 0);
   return out;
 }
 
-function depthOf(span: Span, byId: Map<string, Span>): number {
-  let depth = 0;
-  let cur: Span | undefined = span;
-  while (cur?.parentSpanId) {
-    const parent = byId.get(cur.parentSpanId);
-    if (!parent) break;
-    depth += 1;
-    cur = parent;
-  }
-  return depth;
-}
-
-interface TracesPanelProps {
-  incidentId: string;
-}
-
-export function TracesPanel({ incidentId }: TracesPanelProps) {
-  const { data, loading } = useQuery(GET_INCIDENT_TRACES, {
-    variables: { incidentId },
-  });
-
-  const traces: Trace[] = (data as any)?.incidentTraces || [];
+export function TracesPanel({ incidentId }: { incidentId: string }) {
+  const { data, loading } = useQuery(GET_INCIDENT_TRACES, { variables: { incidentId } });
+  const traces: Trace[] = (data as any)?.incidentTraces ?? [];
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center p-6 text-muted-foreground">
-        <Loader2 size={18} className="animate-spin mr-2" />
-        Loading traces…
+      <div className="space-y-2">
+        <Skeleton className="h-24" />
+        <Skeleton className="h-24" />
       </div>
     );
   }
 
   if (traces.length === 0) {
     return (
-      <p className="text-xs text-muted-foreground italic">
-        No exemplar traces captured for this incident.
+      <p className="rounded-md border border-dashed border-line px-3 py-6 text-center text-[12px] text-ink-subtle">
+        No exemplar traces were captured for this incident.
       </p>
     );
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {traces.map((trace) => {
-        const ordered = orderSpansForWaterfall(trace.spans);
-        const byId = new Map(trace.spans.map((s) => [s.spanId, s]));
+        const rows = flatten(trace.spans);
         const total = trace.rootDurationMs || 1;
+
+        // The single slowest non-root span is the story of the trace — call it
+        // out so the eye lands on the bottleneck instead of hunting for it.
+        const slowest = rows
+          .filter((r) => r.depth > 0)
+          .reduce<Span | null>(
+            (worst, r) => (!worst || r.span.durationMs > worst.durationMs ? r.span : worst),
+            null,
+          );
+
         return (
-          <div key={trace.traceId} className="bg-zinc-800/60 rounded-lg p-3">
-            <div className="flex items-center justify-between mb-2 text-[11px]">
-              <span className="font-mono text-muted-foreground" title={trace.traceId}>
-                {trace.traceId.slice(0, 12)}…
+          <div key={trace.traceId} className="rounded-md border border-line bg-inset p-3">
+            <div className="mb-2.5 flex items-baseline justify-between gap-3">
+              <span className="truncate font-mono text-[11px] font-medium text-ink">
+                {trace.rootName}
               </span>
-              <span className="text-foreground/80">
-                <span className="font-semibold">{trace.rootName}</span>
-                {' '}— {trace.rootDurationMs.toFixed(1)}ms
+              <span className="shrink-0 font-mono text-[11px] text-ink-subtle tabular-nums">
+                {formatDuration(trace.rootDurationMs)}
               </span>
             </div>
-            <div className="space-y-0.5 font-mono text-[10px]">
-              {ordered.map((s) => {
-                const depth = depthOf(s, byId);
-                const pct = Math.max(2, (s.durationMs / total) * 100);
+
+            <div className="space-y-1">
+              {rows.map(({ span, depth }, i) => {
+                const error = span.status && span.status !== 'OK';
+                const isBottleneck = slowest?.spanId === span.spanId;
+                const pct = Math.max(1.5, (span.durationMs / total) * 100);
+
+                // Error → critical red. Bottleneck → amber (it's a warning, not a
+                // failure). Everything else → the neutral series hue.
+                const color = error
+                  ? LEVEL.critical.mark
+                  : isBottleneck
+                    ? LEVEL.warn.mark
+                    : SERIES;
+
                 return (
-                  <div key={s.spanId} className="flex items-center gap-2">
+                  <div key={span.spanId} className="flex items-center gap-2">
                     <div
-                      className="text-muted-foreground truncate"
-                      style={{ paddingLeft: `${depth * 12}px`, width: '220px' }}
-                      title={`${s.service || ''} ${s.name}`}
+                      className="w-44 shrink-0 truncate font-mono text-[10px] text-ink-muted"
+                      style={{ paddingLeft: depth * 10 }}
+                      title={`${span.service ?? ''} ${span.name}`}
                     >
-                      {depth > 0 && <span className="opacity-50">↳ </span>}
-                      {s.name}
+                      {depth > 0 && <span className="text-ink-subtle">└ </span>}
+                      {span.name}
                     </div>
-                    <div className="flex-1 relative h-3 bg-zinc-900 rounded-sm overflow-hidden">
-                      <div
-                        className={`absolute inset-y-0 left-0 ${statusColor(s.status)}`}
-                        style={{ width: `${pct}%` }}
+
+                    <div className="relative h-2.5 flex-1 overflow-hidden rounded-sm bg-card">
+                      <motion.div
+                        className="absolute inset-y-0 left-0 rounded-sm"
+                        style={{ background: color, opacity: error || isBottleneck ? 1 : 0.65 }}
+                        initial={{ width: 0 }}
+                        animate={{ width: `${pct}%` }}
+                        transition={{
+                          duration: 0.55,
+                          delay: i * 0.05,
+                          ease: [0.16, 1, 0.3, 1],
+                        }}
                       />
                     </div>
-                    <div className="w-16 text-right text-foreground/70">
-                      {s.durationMs.toFixed(1)}ms
+
+                    <div
+                      className="w-16 shrink-0 text-right font-mono text-[10px] tabular-nums"
+                      style={{
+                        color: error
+                          ? LEVEL.critical.text
+                          : isBottleneck
+                            ? LEVEL.warn.text
+                            : 'var(--color-ink-muted)',
+                      }}
+                    >
+                      {formatDuration(span.durationMs)}
                     </div>
                   </div>
                 );
@@ -135,9 +152,11 @@ export function TracesPanel({ incidentId }: TracesPanelProps) {
           </div>
         );
       })}
-      <div className="flex items-center gap-1 text-[10px] text-muted-foreground pt-1">
-        <GitBranch size={10} /> Waterfall scaled to root span duration.
-      </div>
+
+      <p className="flex items-center gap-1.5 text-[10px] text-ink-subtle">
+        <GitBranch size={10} />
+        Bars are scaled to the root span. Amber marks the slowest child; red marks an error.
+      </p>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery } from '@apollo/client/react';
-import { Pencil, Plus, Power, Settings, Trash2 } from 'lucide-react';
+import { motion } from 'motion/react';
+import { Pencil, Plus, Power, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   CREATE_RULE,
@@ -10,6 +11,18 @@ import {
   UPDATE_RULE,
 } from '@/graphql/rules';
 import { RuleEditor, type RuleDraft, type RuleExpr } from '@/components/rules/RuleEditor';
+import {
+  Button,
+  Chip,
+  EmptyState,
+  IconButton,
+  PageHeader,
+  Skeleton,
+  StatusBadge,
+} from '@/components/ui';
+import { levelForSeverity } from '@/lib/status';
+import { snappy } from '@/lib/motion';
+import { cn } from '@/lib/utils';
 
 interface AlertRuleRow {
   id: string;
@@ -27,24 +40,16 @@ function emptyDraft(): RuleDraft {
     name: '',
     severity: 'warning',
     runbookUrl: '',
-    expression: {
-      type: 'metric',
-      metric: 'cpu',
-      op: '>',
-      value: 80,
-      window_s: 15,
-    },
+    expression: { type: 'metric', metric: 'cpu', op: '>', value: 80, window_s: 15 },
   };
 }
 
+/** Renders the JSON DSL back as something a human can read at a glance. */
 function describe(expr: RuleExpr): string {
-  if (expr.type === 'metric') {
-    return `${expr.metric} ${expr.op} ${expr.value} for ${expr.window_s}s`;
-  }
-  if (expr.type === 'log') {
-    return `${expr.levels.join('/')} ≥ ${expr.rate_per_min}/min (${expr.window_s}s window)`;
-  }
-  return `${expr.type.toUpperCase()}(${expr.children.map(describe).join(', ')})`;
+  if (expr.type === 'metric') return `${expr.metric} ${expr.op} ${expr.value} for ${expr.window_s}s`;
+  if (expr.type === 'log')
+    return `${expr.levels.join('/')} ≥ ${expr.rate_per_min}/min over ${expr.window_s}s`;
+  return `${expr.type.toUpperCase()}( ${expr.children.map(describe).join(' · ')} )`;
 }
 
 export function RulesPage() {
@@ -56,9 +61,7 @@ export function RulesPage() {
   const [toggleRule] = useMutation(TOGGLE_RULE);
   const [deleteRule] = useMutation(DELETE_RULE);
 
-  const rules: AlertRuleRow[] = (data as any)?.alertRules || [];
-
-  const openNew = () => setEditing(emptyDraft());
+  const rules: AlertRuleRow[] = (data as any)?.alertRules ?? [];
 
   const openEdit = (rule: AlertRuleRow) => {
     let expression: RuleExpr;
@@ -77,143 +80,150 @@ export function RulesPage() {
   };
 
   const handleSubmit = async (draft: RuleDraft) => {
-    const variables: Record<string, unknown> = {
+    const vars: Record<string, unknown> = {
       name: draft.name,
       severity: draft.severity,
       expression: JSON.stringify(draft.expression),
       runbookUrl: draft.runbookUrl || null,
     };
+
     if (draft.id) {
-      await updateRule({ variables: { id: draft.id, ...variables } });
-      toast.success('Rule updated');
+      await updateRule({ variables: { id: draft.id, ...vars } });
+      toast.success('Rule updated', { description: 'The processor reloads within seconds.' });
     } else {
-      variables.type = draft.expression.type === 'and' || draft.expression.type === 'or'
-        ? 'composite'
-        : draft.expression.type;
-      await createRule({ variables });
-      toast.success('Rule created');
+      vars.type =
+        draft.expression.type === 'and' || draft.expression.type === 'or'
+          ? 'composite'
+          : draft.expression.type;
+      await createRule({ variables: vars });
+      toast.success('Rule created', { description: 'The processor reloads within seconds.' });
     }
+
     setEditing(null);
-    await refetch();
-  };
-
-  const handleToggle = async (rule: AlertRuleRow) => {
-    await toggleRule({ variables: { id: rule.id, enabled: !rule.enabled } });
-    toast.success(`Rule ${rule.enabled ? 'disabled' : 'enabled'}`);
-    await refetch();
-  };
-
-  const handleDelete = async (rule: AlertRuleRow) => {
-    if (!confirm(`Delete rule "${rule.name}"? This cannot be undone.`)) return;
-    await deleteRule({ variables: { id: rule.id } });
-    toast.success('Rule deleted');
     await refetch();
   };
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Settings size={22} className="text-emerald-400" />
-            Alert Rules
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Edit alerts inline — the processor reloads within seconds.
-          </p>
-        </div>
-        <button
-          onClick={openNew}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 text-sm font-medium transition-colors"
-        >
-          <Plus size={14} />
-          New rule
-        </button>
-      </div>
+      <PageHeader
+        title="Alert rules"
+        subtitle="Edit a rule and the running processor picks it up within seconds — no restart."
+        actions={
+          <Button variant="primary" icon={Plus} onClick={() => setEditing(emptyDraft())}>
+            New rule
+          </Button>
+        }
+      />
 
-      <div className="glass rounded-xl border border-zinc-800 overflow-hidden">
+      <div className="overflow-hidden rounded-lg border border-line bg-card">
         {loading && rules.length === 0 ? (
-          <div className="p-8 space-y-3">
+          <div className="space-y-2 p-4">
             {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="h-12 bg-zinc-800/50 rounded-lg animate-pulse" />
+              <Skeleton key={i} className="h-11" />
             ))}
           </div>
         ) : rules.length === 0 ? (
-          <div className="p-12 text-center text-muted-foreground text-sm">
-            No rules defined.
-          </div>
+          <EmptyState
+            icon={SlidersHorizontal}
+            title="No alert rules yet"
+            hint="Without a rule nothing will ever page anyone. Start with a CPU threshold."
+            action={
+              <Button variant="primary" icon={Plus} onClick={() => setEditing(emptyDraft())}>
+                Create the first rule
+              </Button>
+            }
+          />
         ) : (
-          <table className="w-full text-sm">
+          <table className="w-full">
             <thead>
-              <tr className="border-b border-zinc-800 text-left text-[11px] text-muted-foreground uppercase tracking-wider">
-                <th className="px-4 py-3 w-12"></th>
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Severity</th>
-                <th className="px-4 py-3">Expression</th>
-                <th className="px-4 py-3 text-right">Actions</th>
+              <tr className="border-b border-line">
+                <th className="w-12" />
+                {['Name', 'Type', 'Severity', 'Expression'].map((h) => (
+                  <th
+                    key={h}
+                    className="px-4 py-2.5 text-left text-[10px] font-medium tracking-wider text-ink-subtle uppercase"
+                  >
+                    {h}
+                  </th>
+                ))}
+                <th className="px-4 py-2.5 text-right text-[10px] font-medium tracking-wider text-ink-subtle uppercase">
+                  Actions
+                </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-800/50">
-              {rules.map((rule) => {
+
+            <tbody>
+              {rules.map((rule, i) => {
                 let expr: RuleExpr | null = null;
                 try {
                   expr = JSON.parse(rule.expression);
                 } catch {
-                  /* malformed expression — render raw */
+                  /* malformed — fall back to the raw string below */
                 }
+
                 return (
-                  <tr key={rule.id} className={!rule.enabled ? 'opacity-50' : ''}>
-                    <td className="px-4 py-3">
+                  <motion.tr
+                    key={rule.id}
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ ...snappy, delay: i * 0.03 }}
+                    className={cn(
+                      'border-b border-line/60 transition-colors last:border-0 hover:bg-elevated',
+                      !rule.enabled && 'opacity-45',
+                    )}
+                  >
+                    <td className="py-2.5 pl-4">
+                      {/* A disabled rule is inert, not broken — so the toggle is
+                          chrome, never a status colour. */}
                       <button
-                        onClick={() => handleToggle(rule)}
-                        title={rule.enabled ? 'Disable' : 'Enable'}
-                        className={`p-1.5 rounded-md transition-colors ${
+                        onClick={async () => {
+                          await toggleRule({ variables: { id: rule.id, enabled: !rule.enabled } });
+                          toast.success(`Rule ${rule.enabled ? 'disabled' : 'enabled'}`);
+                          await refetch();
+                        }}
+                        title={rule.enabled ? 'Disable rule' : 'Enable rule'}
+                        aria-pressed={rule.enabled}
+                        className={cn(
+                          'grid h-7 w-7 place-items-center rounded-md transition-colors',
                           rule.enabled
-                            ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
-                            : 'bg-zinc-800 text-muted-foreground hover:text-foreground'
-                        }`}
+                            ? 'bg-elevated text-ink'
+                            : 'bg-inset text-ink-subtle hover:text-ink',
+                        )}
                       >
-                        <Power size={14} />
+                        <Power size={13} />
                       </button>
                     </td>
-                    <td className="px-4 py-3 font-medium">{rule.name}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground uppercase">
-                      {rule.type}
+                    <td className="px-4 py-2.5 text-[13px] font-medium text-ink">{rule.name}</td>
+                    <td className="px-4 py-2.5">
+                      <Chip>{rule.type}</Chip>
                     </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`text-[11px] font-semibold px-2 py-0.5 rounded ${
-                          rule.severity === 'critical'
-                            ? 'bg-red-500/20 text-red-400'
-                            : 'bg-amber-500/20 text-amber-400'
-                        }`}
-                      >
-                        {rule.severity.toUpperCase()}
+                    <td className="px-4 py-2.5">
+                      <StatusBadge level={levelForSeverity(rule.severity)}>
+                        {rule.severity}
+                      </StatusBadge>
+                    </td>
+                    <td className="max-w-md px-4 py-2.5">
+                      <span className="block truncate font-mono text-[11px] text-ink-muted">
+                        {expr ? describe(expr) : rule.expression}
                       </span>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground truncate max-w-md">
-                      {expr ? describe(expr) : rule.expression}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="inline-flex items-center gap-1">
-                        <button
-                          onClick={() => openEdit(rule)}
-                          title="Edit"
-                          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-zinc-800 transition-colors"
-                        >
-                          <Pencil size={14} />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(rule)}
-                          title="Delete"
-                          className="p-1.5 rounded-md text-muted-foreground hover:text-red-400 hover:bg-zinc-800 transition-colors"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center justify-end gap-1">
+                        <IconButton icon={Pencil} label="Edit rule" onClick={() => openEdit(rule)} />
+                        <IconButton
+                          icon={Trash2}
+                          label="Delete rule"
+                          className="hover:text-crit-text"
+                          onClick={async () => {
+                            if (!confirm(`Delete rule “${rule.name}”? This cannot be undone.`)) return;
+                            await deleteRule({ variables: { id: rule.id } });
+                            toast.success('Rule deleted');
+                            await refetch();
+                          }}
+                        />
                       </div>
                     </td>
-                  </tr>
+                  </motion.tr>
                 );
               })}
             </tbody>
@@ -221,13 +231,11 @@ export function RulesPage() {
         )}
       </div>
 
-      {editing && (
-        <RuleEditor
-          draft={editing}
-          onCancel={() => setEditing(null)}
-          onSubmit={handleSubmit}
-        />
-      )}
+      <RuleEditor
+        draft={editing}
+        onCancel={() => setEditing(null)}
+        onSubmit={handleSubmit}
+      />
     </div>
   );
 }

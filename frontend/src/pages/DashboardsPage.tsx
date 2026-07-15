@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@apollo/client/react';
-import { ExternalLink, LayoutGrid, Plus, Trash2 } from 'lucide-react';
+import { motion } from 'motion/react';
+import { ArrowUpRight, LayoutGrid, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import {
-  CREATE_DASHBOARD,
-  DELETE_DASHBOARD,
-  GET_DASHBOARDS,
-} from '@/graphql/dashboards';
+import { CREATE_DASHBOARD, DELETE_DASHBOARD, GET_DASHBOARDS } from '@/graphql/dashboards';
+import { Button, EmptyState, IconButton, PageHeader, Skeleton } from '@/components/ui';
+import { fadeUp, stagger } from '@/lib/motion';
+import { formatDateTime } from '@/lib/format';
 
 interface DashboardRow {
   id: string;
@@ -21,17 +21,17 @@ export function DashboardsPage() {
   const { data, loading, refetch } = useQuery(GET_DASHBOARDS);
   const [createDashboard] = useMutation(CREATE_DASHBOARD);
   const [deleteDashboard] = useMutation(DELETE_DASHBOARD);
-  const [newName, setNewName] = useState('');
+  const [name, setName] = useState('');
 
-  const dashboards: DashboardRow[] = (data as any)?.dashboards || [];
+  const dashboards: DashboardRow[] = (data as any)?.dashboards ?? [];
 
-  const handleCreate = async () => {
-    const name = newName.trim();
-    if (!name) return;
+  const create = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
     const res = await createDashboard({
-      variables: { name, layout: JSON.stringify([]) },
+      variables: { name: trimmed, layout: JSON.stringify([]) },
     });
-    setNewName('');
+    setName('');
     const id = (res.data as any)?.createDashboard?.id;
     if (id) {
       toast.success('Dashboard created');
@@ -39,92 +39,87 @@ export function DashboardsPage() {
     }
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete dashboard "${name}"?`)) return;
-    await deleteDashboard({ variables: { id } });
-    toast.success('Dashboard deleted');
-    await refetch();
-  };
-
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <LayoutGrid size={22} className="text-emerald-400" />
-            Dashboards
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Drag-and-drop custom views. Widgets refresh on their own polling intervals.
-          </p>
-        </div>
+      <PageHeader
+        title="Dashboards"
+        subtitle="Build your own views. Drag widgets around; each one polls on its own."
+      />
+
+      <div className="mb-4 flex gap-2 rounded-lg border border-line bg-card p-3">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && create()}
+          placeholder="Name a new dashboard…"
+          className="field flex-1"
+        />
+        <Button variant="primary" icon={Plus} onClick={create} disabled={!name.trim()}>
+          Create
+        </Button>
       </div>
 
-      <div className="glass rounded-xl border border-zinc-800 p-4 mb-4">
-        <div className="flex gap-2">
-          <input
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="New dashboard name…"
-            className="flex-1 bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/40"
-            onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+      {loading && dashboards.length === 0 ? (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-24" />
+          ))}
+        </div>
+      ) : dashboards.length === 0 ? (
+        <div className="panel">
+          <EmptyState
+            icon={LayoutGrid}
+            title="No dashboards yet"
+            hint="A dashboard is a saved grid of metric charts, log panels and incident lists."
           />
-          <button
-            onClick={handleCreate}
-            disabled={!newName.trim()}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 text-sm font-medium disabled:opacity-50 transition-colors"
-          >
-            <Plus size={14} />
-            Create
-          </button>
         </div>
-      </div>
+      ) : (
+        <motion.div
+          variants={stagger(0.04)}
+          initial="hidden"
+          animate="show"
+          className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"
+        >
+          {dashboards.map((d) => (
+            <motion.div
+              key={d.id}
+              variants={fadeUp}
+              whileHover={{ y: -2 }}
+              className="group relative rounded-lg border border-line bg-card p-4 transition-colors hover:border-line-strong"
+            >
+              <Link to={`/dashboards/${d.id}`} className="block">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="grid h-8 w-8 place-items-center rounded-md bg-elevated text-ink-muted">
+                    <LayoutGrid size={14} />
+                  </div>
+                  <ArrowUpRight
+                    size={14}
+                    className="text-ink-subtle opacity-0 transition-opacity group-hover:opacity-100"
+                  />
+                </div>
+                <div className="mt-3 truncate text-[14px] font-medium text-ink">{d.name}</div>
+                <div className="mt-1 font-mono text-[11px] text-ink-subtle">
+                  Updated {formatDateTime(d.updatedAt)}
+                </div>
+              </Link>
 
-      <div className="glass rounded-xl border border-zinc-800 overflow-hidden">
-        {loading && dashboards.length === 0 ? (
-          <div className="p-6 text-sm text-muted-foreground">Loading…</div>
-        ) : dashboards.length === 0 ? (
-          <div className="p-12 text-center text-muted-foreground text-sm">
-            No dashboards yet. Create your first one above.
-          </div>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-zinc-800 text-left text-[11px] text-muted-foreground uppercase tracking-wider">
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Updated</th>
-                <th className="px-4 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800/50">
-              {dashboards.map((d) => (
-                <tr key={d.id}>
-                  <td className="px-4 py-3 font-medium">
-                    <Link
-                      to={`/dashboards/${d.id}`}
-                      className="hover:text-emerald-400 inline-flex items-center gap-1"
-                    >
-                      {d.name}
-                      <ExternalLink size={11} />
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3 text-xs text-muted-foreground">
-                    {new Date(d.updatedAt).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => handleDelete(d.id, d.name)}
-                      className="p-1.5 rounded-md text-muted-foreground hover:text-red-400 hover:bg-zinc-800 transition-colors"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+              <div className="absolute right-3 bottom-3 opacity-0 transition-opacity group-hover:opacity-100">
+                <IconButton
+                  icon={Trash2}
+                  label={`Delete ${d.name}`}
+                  className="hover:text-crit-text"
+                  onClick={async () => {
+                    if (!confirm(`Delete dashboard “${d.name}”?`)) return;
+                    await deleteDashboard({ variables: { id: d.id } });
+                    toast.success('Dashboard deleted');
+                    await refetch();
+                  }}
+                />
+              </div>
+            </motion.div>
+          ))}
+        </motion.div>
+      )}
     </div>
   );
 }

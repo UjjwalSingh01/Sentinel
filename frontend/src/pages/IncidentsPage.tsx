@@ -1,198 +1,176 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
-import { AlertTriangle, Filter, Layers, RefreshCw } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
+import { Layers, RefreshCw, ShieldCheck } from 'lucide-react';
 import { GET_INCIDENTS } from '@/graphql/queries';
 import { IncidentDetailDialog } from '@/components/incidents/IncidentDetailDialog';
 import { SavedFilterBar } from '@/components/filters/SavedFilterBar';
+import {
+  Chip,
+  EmptyState,
+  IconButton,
+  PageHeader,
+  Skeleton,
+  StatusBadge,
+  Tabs,
+} from '@/components/ui';
+import { levelForIncidentStatus, levelForSeverity } from '@/lib/status';
+import { formatDateTime, timeAgo } from '@/lib/format';
+import { snappy } from '@/lib/motion';
+import { useLive } from '@/lib/live';
+
+type Status = 'all' | 'open' | 'acknowledged' | 'resolved';
 
 export function IncidentsPage() {
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
+  const [params] = useSearchParams();
+  const [status, setStatus] = useState<Status>((params.get('status') as Status) || 'all');
+  const [selected, setSelected] = useState<string | null>(null);
+  const { revision } = useLive();
 
   const { data, loading, refetch } = useQuery(GET_INCIDENTS, {
-    variables: {
-      status: statusFilter === 'all' ? undefined : statusFilter,
-      limit: 100,
-    },
+    variables: { status: status === 'all' ? undefined : status, limit: 100 },
     pollInterval: 10000,
   });
 
-  const incidents = (data as any)?.incidents || [];
+  useEffect(() => {
+    if (revision > 0) refetch();
+  }, [revision, refetch]);
 
-  // Hide child incidents from the top-level list; their existence is shown
-  // as a "+N related" pill on the parent row.
-  const visibleIncidents = useMemo(
-    () => incidents.filter((i: any) => !i.parentIncidentId),
-    [incidents],
-  );
+  const incidents: any[] = (data as any)?.incidents ?? [];
 
-  const statusTabs = [
-    { value: 'all', label: 'All' },
-    { value: 'open', label: 'Open' },
-    { value: 'acknowledged', label: 'Acknowledged' },
-    { value: 'resolved', label: 'Resolved' },
-  ];
+  // Children are folded into their parent's "+N related" pill, so showing them
+  // as their own rows would double-count one real-world problem.
+  const rows = useMemo(() => incidents.filter((i) => !i.parentIncidentId), [incidents]);
 
-  const countByStatus = (s: string) =>
-    s === 'all'
-      ? visibleIncidents.length
-      : visibleIncidents.filter((i: any) => i.status === s).length;
+  const countFor = (s: Status) =>
+    s === 'all' ? rows.length : rows.filter((i) => i.status === s).length;
 
   return (
     <div className="p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Incidents</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Track and manage infrastructure incidents
-          </p>
-        </div>
-        <button
-          onClick={() => refetch()}
-          className="p-2 rounded-lg hover:bg-zinc-800 text-muted-foreground hover:text-foreground transition-colors"
-          title="Refresh"
-        >
-          <RefreshCw size={16} />
-        </button>
-      </div>
+      <PageHeader
+        title="Incidents"
+        subtitle="Every alert the rule engine has fired, newest first."
+        actions={<IconButton icon={RefreshCw} label="Refresh" onClick={() => refetch()} />}
+      />
 
-      {/* Filters */}
-      <div className="space-y-2 mb-6">
-        <div className="flex items-center gap-2 flex-wrap">
-          <Filter size={14} className="text-muted-foreground" />
-          {statusTabs.map((tab) => (
-            <button
-              key={tab.value}
-              onClick={() => setStatusFilter(tab.value)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${
-                statusFilter === tab.value
-                  ? 'bg-emerald-500/20 text-emerald-400'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-zinc-800'
-              }`}
-            >
-              {tab.label}
-              <span className="ml-1.5 text-[10px] opacity-60">
-                ({countByStatus(tab.value)})
-              </span>
-            </button>
-          ))}
-        </div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <Tabs
+          layoutId="incident-status"
+          value={status}
+          onChange={setStatus}
+          items={[
+            { value: 'all', label: 'All', count: countFor('all') },
+            { value: 'open', label: 'Open', count: countFor('open') },
+            { value: 'acknowledged', label: 'Acknowledged', count: countFor('acknowledged') },
+            { value: 'resolved', label: 'Resolved', count: countFor('resolved') },
+          ]}
+        />
         <SavedFilterBar
           scope="incidents"
-          currentFilter={{ status: statusFilter }}
+          currentFilter={{ status }}
           onApply={(f) => {
-            if (typeof f.status === 'string') setStatusFilter(f.status);
+            if (typeof f.status === 'string') setStatus(f.status as Status);
           }}
         />
       </div>
 
-      {/* Incidents Table */}
-      <div className="glass rounded-xl border border-zinc-800 overflow-hidden">
+      <div className="overflow-hidden rounded-lg border border-line bg-card">
         {loading && incidents.length === 0 ? (
-          <div className="p-8 space-y-3">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="h-16 bg-zinc-800/50 rounded-lg animate-pulse" />
+          <div className="space-y-2 p-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-11" />
             ))}
           </div>
-        ) : visibleIncidents.length === 0 ? (
-          <div className="p-16 text-center text-muted-foreground">
-            <AlertTriangle size={40} className="mx-auto mb-4 opacity-20" />
-            <p className="text-lg font-medium">No incidents found</p>
-            <p className="text-sm mt-1">
-              {statusFilter !== 'all'
-                ? `No ${statusFilter} incidents. Try changing the filter.`
-                : 'All systems operating normally.'}
-            </p>
-          </div>
+        ) : rows.length === 0 ? (
+          <EmptyState
+            icon={ShieldCheck}
+            title="No incidents here"
+            hint={
+              status === 'all'
+                ? 'Nothing has breached a rule. The fleet is inside its thresholds.'
+                : `No ${status} incidents right now.`
+            }
+          />
         ) : (
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-zinc-800 text-left">
-                <th className="px-4 py-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Severity
-                </th>
-                <th className="px-4 py-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Server
-                </th>
-                <th className="px-4 py-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Metric
-                </th>
-                <th className="px-4 py-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Message
-                </th>
-                <th className="px-4 py-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-4 py-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Assignee
-                </th>
-                <th className="px-4 py-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Created
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800/50">
-              {visibleIncidents.map((inc: any) => (
-                <tr
-                  key={inc.id}
-                  onClick={() => setSelectedIncident(inc.id)}
-                  className="hover:bg-zinc-800/30 cursor-pointer transition-colors"
-                >
-                  <td className="px-4 py-3">
-                    <span
-                      className={`text-[11px] font-semibold px-2 py-1 rounded ${
-                        inc.severity === 'critical'
-                          ? 'bg-red-500/20 text-red-400'
-                          : 'bg-amber-500/20 text-amber-400'
-                      }`}
-                    >
-                      {inc.severity.toUpperCase()}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-sm font-mono">{inc.serverId}</td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {inc.metricType}
-                  </td>
-                  <td className="px-4 py-3 text-sm max-w-xs truncate">
-                    <span>{inc.message}</span>
-                    {inc.childCount > 0 && (
-                      <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-700/60 text-[10px] text-zinc-300">
-                        <Layers size={10} />
-                        +{inc.childCount} related
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`text-[11px] px-2 py-1 rounded ${
-                        inc.status === 'open'
-                          ? 'bg-red-500/10 text-red-400'
-                          : inc.status === 'acknowledged'
-                          ? 'bg-amber-500/10 text-amber-400'
-                          : 'bg-emerald-500/10 text-emerald-400'
-                      }`}
-                    >
-                      {inc.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {inc.assignee?.name || '-'}
-                  </td>
-                  <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
-                    {new Date(inc.createdAt).toLocaleString()}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-line">
+                  {['Severity', 'Server', 'Metric', 'Message', 'Status', 'Assignee', 'Fired'].map(
+                    (h) => (
+                      <th
+                        key={h}
+                        className="px-4 py-2.5 text-left text-[10px] font-medium tracking-wider text-ink-subtle uppercase whitespace-nowrap"
+                      >
+                        {h}
+                      </th>
+                    ),
+                  )}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+
+              <tbody>
+                <AnimatePresence initial={false}>
+                  {rows.map((inc, i) => (
+                    <motion.tr
+                      key={inc.id}
+                      layout
+                      initial={{ opacity: 0, y: 4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ ...snappy, delay: Math.min(i * 0.015, 0.3) }}
+                      onClick={() => setSelected(inc.id)}
+                      className="cursor-pointer border-b border-line/60 transition-colors last:border-0 hover:bg-elevated"
+                    >
+                      <td className="px-4 py-2.5">
+                        <StatusBadge level={levelForSeverity(inc.severity)}>
+                          {inc.severity}
+                        </StatusBadge>
+                      </td>
+                      <td className="px-4 py-2.5 font-mono text-[12px] whitespace-nowrap text-ink">
+                        {inc.serverId}
+                      </td>
+                      <td className="px-4 py-2.5 font-mono text-[11px] whitespace-nowrap text-ink-muted">
+                        {inc.metricType}
+                      </td>
+                      <td className="max-w-md px-4 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-[13px] text-ink">{inc.message}</span>
+                          {inc.childCount > 0 && (
+                            <Chip className="shrink-0">
+                              <Layers size={9} />+{inc.childCount}
+                            </Chip>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <StatusBadge
+                          level={levelForIncidentStatus(inc.status)}
+                          showIcon={false}
+                        >
+                          {inc.status}
+                        </StatusBadge>
+                      </td>
+                      <td className="px-4 py-2.5 text-[12px] whitespace-nowrap text-ink-muted">
+                        {inc.assignee?.name ?? '—'}
+                      </td>
+                      <td
+                        className="px-4 py-2.5 font-mono text-[11px] whitespace-nowrap text-ink-subtle"
+                        title={formatDateTime(inc.createdAt)}
+                      >
+                        {timeAgo(inc.createdAt)}
+                      </td>
+                    </motion.tr>
+                  ))}
+                </AnimatePresence>
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
-      <IncidentDetailDialog
-        incidentId={selectedIncident}
-        onClose={() => setSelectedIncident(null)}
-      />
+      <IncidentDetailDialog incidentId={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }

@@ -1,12 +1,15 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@apollo/client/react';
-import { Activity, AlertTriangle, Server, RefreshCw } from 'lucide-react';
-import { GET_SERVERS, GET_INCIDENTS } from '@/graphql/queries';
+import { motion } from 'motion/react';
+import { AlertOctagon, AlertTriangle, RefreshCw, Server, ServerOff } from 'lucide-react';
+import { GET_INCIDENTS, GET_SERVERS } from '@/graphql/queries';
 import { ServerCard } from '@/components/dashboard/ServerCard';
-import { IncidentFeed } from '@/components/dashboard/IncidentFeed';
+import { IncidentFeed, type FeedIncident } from '@/components/dashboard/IncidentFeed';
 import { IncidentDetailDialog } from '@/components/incidents/IncidentDetailDialog';
-import { connectSSE, disconnectSSE } from '@/lib/sse';
-import { toast } from 'sonner';
+import { EmptyState, IconButton, PageHeader, Skeleton, Stat } from '@/components/ui';
+import { levelForServer } from '@/lib/status';
+import { stagger } from '@/lib/motion';
+import { useLive } from '@/lib/live';
 
 interface ServerData {
   serverId: string;
@@ -16,192 +19,191 @@ interface ServerData {
   latencyMs: number;
 }
 
-interface IncidentData {
-  id: string;
-  serverId: string;
-  metricType: string;
-  severity: string;
-  message: string;
-  status: string;
-  createdAt: string;
-}
+const HISTORY_LENGTH = 40;
 
 export function DashboardPage() {
   const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
+  const { revision } = useLive();
 
   const {
     data: serversData,
     loading: serversLoading,
     refetch: refetchServers,
-  } = useQuery(GET_SERVERS, {
-    pollInterval: 5000,
-  });
+  } = useQuery(GET_SERVERS, { pollInterval: 5000 });
 
   const {
     data: incidentsData,
     loading: incidentsLoading,
     refetch: refetchIncidents,
-  } = useQuery(GET_INCIDENTS, {
-    variables: { limit: 20 },
-    pollInterval: 10000,
-  });
+  } = useQuery(GET_INCIDENTS, { variables: { limit: 20 }, pollInterval: 10000 });
 
-  const handleNewIncident = useCallback(
-    (data: unknown) => {
-      const incident = data as { server_id?: string; severity?: string; message?: string };
-      toast.error(
-        `${(incident.severity || 'alert').toUpperCase()} on ${incident.server_id || 'unknown'}`,
-        {
-          description: incident.message || 'New incident detected',
-          duration: 6000,
-        }
-      );
+  // An incident pushed over SSE should appear now, not on the next poll tick.
+  useEffect(() => {
+    if (revision > 0) {
       refetchIncidents();
       refetchServers();
-    },
-    [refetchIncidents, refetchServers]
-  );
+    }
+  }, [revision, refetchIncidents, refetchServers]);
 
-  const handleIncidentUpdated = useCallback(
-    (data: unknown) => {
-      const incident = data as { status?: string; server_id?: string };
-      toast.info(
-        `Incident ${incident.status || 'updated'}`,
-        {
-          description: `Server: ${incident.server_id || 'unknown'}`,
-          duration: 4000,
-        }
-      );
-      refetchIncidents();
-    },
-    [refetchIncidents]
+  const servers: ServerData[] = useMemo(
+    () => (serversData as any)?.servers ?? [],
+    [serversData],
   );
+  const incidents: FeedIncident[] = (incidentsData as any)?.incidents ?? [];
+
+  /* --- CPU history -------------------------------------------------------
+     The API only ever hands us "CPU right now", so a per-card sparkline would
+     normally need a second query per server. Instead we keep the last N polls
+     in a ref — the trend line is a free by-product of the polling we already do. */
+  const historyRef = useRef<Record<string, number[]>>({});
+  const [, forceHistoryRender] = useState(0);
 
   useEffect(() => {
-    connectSSE({
-      onNewIncident: handleNewIncident,
-      onIncidentUpdated: handleIncidentUpdated,
-      onConnected: () => {
-        toast.success('Real-time connection established', { duration: 2000 });
-      },
-    });
+    if (servers.length === 0) return;
+    const next = { ...historyRef.current };
+    for (const s of servers) {
+      const prev = next[s.serverId] ?? [];
+      const grown = [...prev, s.cpu];
+      next[s.serverId] = grown.slice(-HISTORY_LENGTH);
+    }
+    historyRef.current = next;
+    forceHistoryRender((n) => n + 1);
+  }, [servers]);
 
-    return () => {
-      disconnectSSE();
+  /* --- Fresh-incident highlighting -------------------------------------- */
+  const seenRef = useRef<Set<string> | null>(null);
+  const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (incidents.length === 0) return;
+    const ids = incidents.map((i) => i.id);
+
+    // The first payload is history, not news — nothing in it should flash.
+    if (seenRef.current === null) {
+      seenRef.current = new Set(ids);
+      return;
+    }
+
+    const arrivals = ids.filter((id) => !seenRef.current!.has(id));
+    if (arrivals.length === 0) return;
+
+    arrivals.forEach((id) => seenRef.current!.add(id));
+    setFreshIds(new Set(arrivals));
+    const t = setTimeout(() => setFreshIds(new Set()), 2000);
+    return () => clearTimeout(t);
+  }, [incidents]);
+
+  const openIncidents = incidents.filter((i) => i.status !== 'resolved');
+
+  const incidentCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const i of openIncidents) {
+      counts[i.serverId] = (counts[i.serverId] ?? 0) + 1;
+    }
+    return counts;
+  }, [openIncidents]);
+
+  const fleet = useMemo(() => {
+    const levels = servers.map(levelForServer);
+    return {
+      total: servers.length,
+      healthy: levels.filter((l) => l === 'good').length,
+      degraded: levels.filter((l) => l === 'warn').length,
+      critical: levels.filter((l) => l === 'critical').length,
     };
-  }, [handleNewIncident, handleIncidentUpdated]);
+  }, [servers]);
 
-  const servers: ServerData[] = (serversData as any)?.servers || [];
-  const incidents: IncidentData[] = (incidentsData as any)?.incidents || [];
-  const openIncidents = incidents.filter((i: IncidentData) => i.status !== 'resolved');
+  const refreshAll = () => {
+    refetchServers();
+    refetchIncidents();
+  };
 
-  // Count incidents per server
-  const incidentCounts: Record<string, number> = {};
-  openIncidents.forEach((i: IncidentData) => {
-    incidentCounts[i.serverId] = (incidentCounts[i.serverId] || 0) + 1;
-  });
+  const loadingFleet = serversLoading && servers.length === 0;
 
   return (
-    <div className="p-6 h-screen flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-sm text-muted-foreground mt-1">Real-time infrastructure overview</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-900">
-            <Activity size={14} className="text-emerald-400" />
-            <span className="text-xs text-muted-foreground">{servers.length} servers</span>
-            <span className="text-xs text-zinc-600">|</span>
-            <AlertTriangle size={14} className={openIncidents.length > 0 ? 'text-amber-400' : 'text-muted-foreground'} />
-            <span className="text-xs text-muted-foreground">{openIncidents.length} active</span>
+    <div className="flex h-screen flex-col p-6">
+      <PageHeader
+        title="Overview"
+        subtitle="Live health of every server reporting into Sentinel."
+        actions={<IconButton icon={RefreshCw} label="Refresh" onClick={refreshAll} />}
+      />
+
+      {/* Fleet summary. Stat tiles, not charts — four numbers don't need axes,
+          and the answer to "is anything on fire" should be readable in one look. */}
+      <div className="mb-5 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line md:grid-cols-4">
+        {[
+          { label: 'Servers reporting', value: fleet.total, icon: Server, level: 'neutral' as const },
+          { label: 'Healthy', value: fleet.healthy, icon: Server, level: 'neutral' as const },
+          { label: 'Degraded', value: fleet.degraded, icon: AlertTriangle, level: 'warn' as const },
+          { label: 'Critical', value: fleet.critical, icon: AlertOctagon, level: 'critical' as const },
+        ].map((s) => (
+          <div key={s.label} className="bg-card px-4 py-3.5">
+            <Stat label={s.label} value={s.value} icon={s.icon} level={s.level} />
           </div>
-          <button
-            onClick={() => { refetchServers(); refetchIncidents(); }}
-            className="p-2 rounded-lg hover:bg-zinc-800 text-muted-foreground hover:text-foreground transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw size={16} />
-          </button>
-        </div>
+        ))}
       </div>
 
-      {/* Main content */}
-      <div className="flex-1 flex gap-6 min-h-0">
-        {/* Server grid */}
-        <div className="flex-1 overflow-y-auto pr-2">
-          {serversLoading && servers.length === 0 ? (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="glass rounded-xl p-5 h-52 animate-pulse">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-10 h-10 rounded-lg bg-zinc-800" />
-                    <div>
-                      <div className="w-24 h-4 bg-zinc-800 rounded" />
-                      <div className="w-16 h-3 bg-zinc-800 rounded mt-1" />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-4 gap-2">
-                    {Array.from({ length: 4 }).map((_, j) => (
-                      <div key={j} className="w-16 h-16 bg-zinc-800 rounded-full mx-auto" />
-                    ))}
-                  </div>
-                </div>
+      <div className="flex min-h-0 flex-1 gap-5">
+        <section className="min-w-0 flex-1 overflow-y-auto pr-1" aria-label="Servers">
+          {loadingFleet ? (
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-47" />
               ))}
             </div>
           ) : servers.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-              <Server size={48} className="opacity-20 mb-4" />
-              <p className="text-lg font-medium">No servers detected</p>
-              <p className="text-sm mt-1">Waiting for metric data from the simulator...</p>
+            <div className="panel">
+              <EmptyState
+                icon={ServerOff}
+                title="No servers reporting"
+                hint="Nothing has sent a metric yet. Once the simulator starts producing, cards appear here automatically."
+              />
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {servers.map((server: ServerData) => (
+            <motion.div
+              variants={stagger(0.04)}
+              initial="hidden"
+              animate="show"
+              className="grid grid-cols-1 gap-4 xl:grid-cols-2"
+            >
+              {servers.map((server) => (
                 <ServerCard
                   key={server.serverId}
-                  serverId={server.serverId}
-                  cpu={server.cpu}
-                  memory={server.memory}
-                  disk={server.disk}
-                  latencyMs={server.latencyMs}
-                  incidentCount={incidentCounts[server.serverId] || 0}
+                  {...server}
+                  incidentCount={incidentCounts[server.serverId] ?? 0}
+                  history={historyRef.current[server.serverId] ?? []}
                 />
               ))}
-            </div>
+            </motion.div>
           )}
-        </div>
+        </section>
 
-        {/* Incident feed sidebar */}
-        <div className="w-80 shrink-0 glass rounded-xl border border-zinc-800 flex flex-col">
-          <div className="p-4 border-b border-zinc-800">
-            <div className="flex items-center gap-2">
-              <AlertTriangle size={16} className="text-amber-400" />
-              <h3 className="text-sm font-semibold">Incident Feed</h3>
-              <span className="ml-auto text-xs text-muted-foreground bg-zinc-800 px-2 py-0.5 rounded-full">
-                {openIncidents.length}
-              </span>
-            </div>
-          </div>
-          <div className="flex-1 p-3 overflow-y-auto">
+        <aside className="flex w-85 shrink-0 flex-col overflow-hidden rounded-lg border border-line bg-card">
+          <header className="flex items-center gap-2 border-b border-line px-4 py-3">
+            <h2 className="text-[13px] font-semibold text-ink">Incident feed</h2>
+            <span className="ml-auto font-mono text-[11px] text-ink-subtle tabular-nums">
+              {openIncidents.length} active
+            </span>
+          </header>
+
+          <div className="flex-1 overflow-y-auto">
             {incidentsLoading && incidents.length === 0 ? (
-              <div className="space-y-2">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <div key={i} className="h-20 bg-zinc-800/50 rounded-lg animate-pulse" />
+              <div className="space-y-2 p-3">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} className="h-19" />
                 ))}
               </div>
             ) : (
               <IncidentFeed
                 incidents={incidents}
                 onIncidentClick={setSelectedIncident}
+                freshIds={freshIds}
               />
             )}
           </div>
-        </div>
+        </aside>
       </div>
 
-      {/* Incident detail dialog */}
       <IncidentDetailDialog
         incidentId={selectedIncident}
         onClose={() => setSelectedIncident(null)}

@@ -1,30 +1,53 @@
 @import "tailwindcss";
 
-@theme {
-  --color-background: #09090b;
-  --color-foreground: #fafafa;
-  --color-card: #18181b;
-  --color-card-foreground: #fafafa;
-  --color-popover: #18181b;
-  --color-popover-foreground: #fafafa;
-  --color-primary: #10b981;
-  --color-primary-foreground: #09090b;
-  --color-secondary: #27272a;
-  --color-secondary-foreground: #fafafa;
-  --color-muted: #27272a;
-  --color-muted-foreground: #a1a1aa;
-  --color-accent: #27272a;
-  --color-accent-foreground: #fafafa;
-  --color-destructive: #ef4444;
-  --color-destructive-foreground: #fafafa;
-  --color-border: #3f3f46;
-  --color-input: #3f3f46;
-  --color-ring: #10b981;
+/* ---------------------------------------------------------------------------
+   Sentinel design system — "signal-first console"
+   ---------------------------------------------------------------------------
+   The chrome is achromatic on purpose. Colour is a scarce resource here and it
+   is spent on exactly one thing: the health of a server. If something on screen
+   is green, amber or red, it is telling you about a *value*, never about a
+   button, a tab or a brand.
 
-  --color-severity-critical: #ef4444;
-  --color-severity-warning: #f59e0b;
-  --color-severity-healthy: #10b981;
-  --color-severity-info: #3b82f6;
+   Palette provenance (validated with the dataviz palette checker against the
+   real surfaces, not eyeballed):
+     - status marks  #0ca30c / #fab219 / #ec835a / #d03b3b  (reserved set,
+       CVD-separated, >=3:1 on canvas) — always shipped with an icon + label so
+       they never carry meaning by colour alone.
+     - status text   lighter steps of the same hues, >=6.6:1 for small type.
+     - series        one hue (#3987e5) for every time-series and sparkline. All
+       charts here are single-series, so a second hue would encode nothing —
+       and reusing amber for a "memory" line would collide with amber=warning.
+--------------------------------------------------------------------------- */
+
+@theme {
+  /* Surfaces — five steps of near-black, enough to build depth without borders */
+  --color-canvas: #0a0a0c;
+  --color-panel: #0d0d10;
+  --color-card: #101014;
+  --color-elevated: #16161b;
+  --color-inset: #08080a;
+
+  /* Hairlines */
+  --color-line: #1e1e24;
+  --color-line-strong: #2b2b34;
+
+  /* Ink */
+  --color-ink: #ececf0;
+  --color-ink-muted: #9a9aa4;
+  --color-ink-subtle: #6e6e78;
+
+  /* Series — one hue, every chart */
+  --color-series: #3987e5;
+  --color-series-text: #6ba7f5;
+
+  /* Status — reserved. Never used for chrome, never used as a series colour. */
+  --color-good: #0ca30c;
+  --color-good-text: #3ecf5c;
+  --color-warn: #fab219;
+  --color-warn-text: #fab219;
+  --color-serious: #ec835a;
+  --color-crit: #d03b3b;
+  --color-crit-text: #f0716f;
 
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
@@ -33,24 +56,54 @@
   --radius-md: 0.5rem;
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
+
+  /* Motion. Everything that moves borrows a curve from here so the whole app
+     decelerates with the same personality. */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 }
 
 @layer base {
+  :root {
+    color-scheme: dark;
+  }
+
   * {
-    border-color: var(--color-border);
+    border-color: var(--color-line);
   }
 
   body {
-    background-color: var(--color-background);
-    color: var(--color-foreground);
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
     font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'ss01';
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
+  /* Every number in this app is tabular so digits don't jitter as they tick. */
+  .font-mono,
+  code,
+  pre {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'zero' 1;
+  }
+
+  /* One focus ring, everywhere, and only for keyboard users. */
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-series) 35%, transparent);
+  }
+
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
   }
 
   ::-webkit-scrollbar-track {
@@ -58,58 +111,162 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #3f3f46;
-    border-radius: 3px;
+    background: var(--color-line-strong);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: #52525b;
+    background: #3c3c46;
+    background-clip: content-box;
+  }
+
+  /* Native controls inherit the dark surface instead of the OS default. */
+  select,
+  input,
+  textarea,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  select option {
+    background: var(--color-elevated);
+    color: var(--color-ink);
+  }
+}
+
+@layer components {
+  /* A panel is the one surface primitive: hairline + card fill. Depth comes
+     from the fill step, not from a drop shadow, so panels stay flat and calm. */
+  .panel {
+    background-color: var(--color-card);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-lg);
+  }
+
+  /* Inputs share a single silhouette so forms read as one system. */
+  .field {
+    width: 100%;
+    background-color: var(--color-inset);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-md);
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    color: var(--color-ink);
+    transition: border-color 160ms var(--ease-out-quint),
+      background-color 160ms var(--ease-out-quint);
+  }
+
+  .field::placeholder {
+    color: var(--color-ink-subtle);
+  }
+
+  .field:hover:not(:disabled) {
+    border-color: var(--color-line-strong);
+  }
+
+  .field:focus {
+    outline: none;
+    border-color: #4a4a56;
+    background-color: var(--color-elevated);
+  }
+
+  .field:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 }
 
 @layer utilities {
-  .glass {
-    background: rgba(24, 24, 27, 0.7);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(63, 63, 70, 0.5);
+  /* Skeletons sweep rather than blink — a blink reads as a glitch, a sweep
+     reads as "still loading". */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background-color: var(--color-elevated);
+    border-radius: var(--radius-md);
   }
 
-  .glass-strong {
-    background: rgba(24, 24, 27, 0.85);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid rgba(63, 63, 70, 0.6);
+  .skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 255, 255, 0.04),
+      transparent
+    );
+    animation: shimmer 1.6s infinite;
   }
 
-  .animate-pulse-slow {
-    animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  /* The one "alive" signal in the app: a dot that breathes with a halo. Used
+     for the live-stream indicator and for a critical server's status dot. */
+  .pulse-dot {
+    position: relative;
   }
 
-  .animate-fade-in {
-    animation: fadeIn 0.3s ease-out;
+  .pulse-dot::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    background: inherit;
+    animation: halo 2s var(--ease-out-expo) infinite;
   }
 
-  .animate-slide-up {
-    animation: slideUp 0.3s ease-out;
+  /* A freshly-arrived row sweeps once, then never again. */
+  .flash-in {
+    animation: flash 1.4s var(--ease-out-quint);
   }
 
-  .animate-slide-in-right {
-    animation: slideInRight 0.3s ease-out;
+  .text-balance {
+    text-wrap: balance;
   }
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
 }
 
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+@keyframes halo {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  70%,
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
 }
 
-@keyframes slideInRight {
-  from { opacity: 0; transform: translateX(20px); }
-  to { opacity: 1; transform: translateX(0); }
+@keyframes flash {
+  0% {
+    background-color: color-mix(in srgb, var(--color-series) 14%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Motion is a feature, not a requirement. If the OS says "reduce", every
+   entrance, sweep and pulse collapses to a plain cut — the app still works,
+   it just stops moving.
+--------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

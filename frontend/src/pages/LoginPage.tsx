@@ -1,7 +1,15 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Loader2, AlertCircle } from 'lucide-react';
+import { motion } from 'motion/react';
+import { AlertCircle, ArrowRight, Shield } from 'lucide-react';
 import { login } from '@/lib/auth';
+import { Button } from '@/components/ui';
+import { stagger } from '@/lib/motion';
+
+const item = {
+  hidden: { opacity: 0, y: 10 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: [0.16, 1, 0.3, 1] as const } },
+};
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -14,114 +22,125 @@ export function LoginPage() {
     e.preventDefault();
     setError('');
     setLoading(true);
-
     try {
       await login(email, password);
       navigate('/');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
-    } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center relative overflow-hidden">
-      {/* Animated background gradients */}
-      <div className="absolute inset-0">
-        <div className="absolute top-1/4 -left-32 w-96 h-96 bg-emerald-500/5 rounded-full blur-[128px] animate-pulse-slow" />
-        <div className="absolute bottom-1/4 -right-32 w-96 h-96 bg-emerald-500/3 rounded-full blur-[128px] animate-pulse-slow" style={{ animationDelay: '1.5s' }} />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-zinc-900/50 rounded-full blur-[100px]" />
-      </div>
-
-      {/* Grid pattern overlay */}
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-canvas p-4">
+      {/* Backdrop. Achromatic, slow, and behind everything — it sets a mood
+          without spending any of the colour budget that health signals need. */}
       <div
-        className="absolute inset-0 opacity-[0.02]"
+        className="pointer-events-none absolute inset-0 opacity-[0.035]"
         style={{
-          backgroundImage: `linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px),
-                           linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)`,
-          backgroundSize: '64px 64px',
+          backgroundImage:
+            'linear-gradient(rgba(255,255,255,.5) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.5) 1px, transparent 1px)',
+          backgroundSize: '56px 56px',
+          maskImage: 'radial-gradient(ellipse 80% 60% at 50% 40%, black, transparent)',
         }}
       />
+      <motion.div
+        aria-hidden
+        className="pointer-events-none absolute top-1/2 left-1/2 h-[560px] w-[560px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+        style={{
+          background:
+            'radial-gradient(circle, rgba(57,135,229,0.10) 0%, rgba(57,135,229,0) 65%)',
+        }}
+        animate={{ scale: [1, 1.12, 1], opacity: [0.6, 1, 0.6] }}
+        transition={{ duration: 9, repeat: Infinity, ease: 'easeInOut' }}
+      />
 
-      {/* Login card */}
-      <div className="relative z-10 w-full max-w-md mx-4 animate-fade-in">
-        <div className="glass-strong rounded-2xl p-8 shadow-2xl shadow-black/20">
-          {/* Logo section */}
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center p-3 rounded-2xl bg-emerald-500/10 mb-4">
-              <Shield size={32} className="text-emerald-400" />
-            </div>
-            <h1 className="text-2xl font-bold tracking-tight">Sentinel</h1>
-            <p className="text-sm text-muted-foreground mt-1">Infrastructure Monitoring Platform</p>
+      <motion.div
+        variants={stagger(0.08, 0.1)}
+        initial="hidden"
+        animate="show"
+        className="relative z-10 w-full max-w-[380px]"
+      >
+        <motion.div variants={item} className="mb-8 text-center">
+          <div className="mb-5 inline-grid h-11 w-11 place-items-center rounded-xl border border-line bg-card">
+            <Shield size={19} className="text-ink" />
           </div>
+          <h1 className="text-[22px] leading-tight font-semibold tracking-[-0.02em] text-ink">
+            Sentinel
+          </h1>
+          <p className="mt-1.5 text-[13px] text-ink-muted">
+            Sign in to the observability console.
+          </p>
+        </motion.div>
 
-          {/* Error message */}
+        <motion.form
+          variants={item}
+          onSubmit={handleSubmit}
+          className="space-y-3.5 rounded-xl border border-line bg-panel p-6 shadow-2xl shadow-black/40"
+        >
           {error && (
-            <div className="flex items-center gap-2 p-3 mb-6 rounded-lg bg-red-500/10 border border-red-500/20 animate-slide-up">
-              <AlertCircle size={16} className="text-red-400 shrink-0" />
-              <p className="text-sm text-red-400">{error}</p>
-            </div>
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              className="flex items-center gap-2 overflow-hidden rounded-md px-3 py-2.5"
+              style={{ background: 'rgba(208,59,59,0.12)', color: '#f0716f' }}
+              role="alert"
+            >
+              <AlertCircle size={14} className="shrink-0" />
+              <p className="text-[12px]">{error}</p>
+            </motion.div>
           )}
 
-          {/* Login form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-muted-foreground mb-1.5">
-                Email address
-              </label>
-              <input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                placeholder="admin@sentinel.io"
-                className="w-full px-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-foreground placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all text-sm"
-                autoComplete="email"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-muted-foreground mb-1.5">
-                Password
-              </label>
-              <input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                placeholder="Enter password"
-                className="w-full px-4 py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-foreground placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all text-sm"
-                autoComplete="current-password"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed mt-6 shadow-lg shadow-emerald-500/20"
-            >
-              {loading ? (
-                <>
-                  <Loader2 size={16} className="animate-spin" />
-                  Signing in...
-                </>
-              ) : (
-                'Sign in'
-              )}
-            </button>
-          </form>
-
-          {/* Demo credentials hint */}
-          <div className="mt-6 pt-5 border-t border-zinc-800">
-            <p className="text-[11px] text-muted-foreground text-center">
-              Demo: admin@sentinel.io / sentinel123
-            </p>
+          <div>
+            <label htmlFor="email" className="mb-1.5 block text-[12px] font-medium text-ink-muted">
+              Email
+            </label>
+            <input
+              id="email"
+              type="email"
+              required
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="admin@sentinel.io"
+              className="field"
+            />
           </div>
-        </div>
-      </div>
+
+          <div>
+            <label
+              htmlFor="password"
+              className="mb-1.5 block text-[12px] font-medium text-ink-muted"
+            >
+              Password
+            </label>
+            <input
+              id="password"
+              type="password"
+              required
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className="field"
+            />
+          </div>
+
+          <Button
+            type="submit"
+            variant="primary"
+            loading={loading}
+            className="mt-2 w-full py-2.5"
+          >
+            {loading ? 'Signing in…' : 'Sign in'}
+            {!loading && <ArrowRight size={14} />}
+          </Button>
+        </motion.form>
+
+        <motion.p variants={item} className="mt-5 text-center font-mono text-[11px] text-ink-subtle">
+          admin@sentinel.io · sentinel123
+        </motion.p>
+      </motion.div>
     </div>
   );
 }

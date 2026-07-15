@@ -1,15 +1,14 @@
 import { useQuery } from '@apollo/client/react';
-import { AlertOctagon, AlertTriangle } from 'lucide-react';
 import { GET_INCIDENTS } from '@/graphql/queries';
+import { LEVEL, levelForIncidentStatus, levelForSeverity } from '@/lib/status';
+import { timeAgo } from '@/lib/format';
+import { StatusBadge } from '@/components/ui';
+import { WidgetFrame, WidgetMessage } from './WidgetFrame';
 
 export interface IncidentListConfig {
   status?: 'open' | 'acknowledged' | 'resolved';
   serverId?: string;
   limit?: number;
-}
-
-interface IncidentListWidgetProps {
-  config: IncidentListConfig;
 }
 
 interface IncidentRow {
@@ -22,7 +21,7 @@ interface IncidentRow {
   parentIncidentId?: string | null;
 }
 
-export function IncidentListWidget({ config }: IncidentListWidgetProps) {
+export function IncidentListWidget({ config }: { config: IncidentListConfig }) {
   const { data, loading } = useQuery(GET_INCIDENTS, {
     variables: {
       status: config.status,
@@ -33,65 +32,46 @@ export function IncidentListWidget({ config }: IncidentListWidgetProps) {
     fetchPolicy: 'cache-and-network',
   });
 
-  const incidents: IncidentRow[] = ((data as any)?.incidents || []).filter(
+  const incidents: IncidentRow[] = ((data as any)?.incidents ?? []).filter(
     (i: IncidentRow) => !i.parentIncidentId,
   );
 
+  const title = ['Incidents', config.status, config.serverId].filter(Boolean).join(' · ');
+
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center gap-2 mb-2 text-xs text-muted-foreground">
-        <AlertTriangle size={12} className="text-amber-400" />
-        <span className="font-medium">
-          Incidents
-          {config.status ? ` · ${config.status}` : ''}
-          {config.serverId ? ` · ${config.serverId}` : ''}
-        </span>
-      </div>
-      <div className="flex-1 min-h-0 overflow-auto">
-        {loading && incidents.length === 0 ? (
-          <div className="text-xs text-muted-foreground p-2">Loading…</div>
-        ) : incidents.length === 0 ? (
-          <div className="text-xs text-muted-foreground italic p-2">No incidents.</div>
-        ) : (
-          <div className="space-y-1">
-            {incidents.map((inc) => {
-              const Icon = inc.severity === 'critical' ? AlertOctagon : AlertTriangle;
-              return (
-                <div
-                  key={inc.id}
-                  className="bg-zinc-800/40 rounded p-2 text-xs flex items-start gap-2"
-                >
-                  <Icon
-                    size={12}
-                    className={
-                      inc.severity === 'critical' ? 'text-red-400 mt-0.5' : 'text-amber-400 mt-0.5'
-                    }
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="font-mono text-[10px] text-muted-foreground">
-                        {inc.serverId}
-                      </span>
-                      <span
-                        className={`text-[9px] px-1 py-0.5 rounded ${
-                          inc.status === 'open'
-                            ? 'bg-red-500/10 text-red-400'
-                            : inc.status === 'acknowledged'
-                            ? 'bg-amber-500/10 text-amber-400'
-                            : 'bg-emerald-500/10 text-emerald-400'
-                        }`}
-                      >
-                        {inc.status}
-                      </span>
-                    </div>
-                    <div className="truncate text-foreground/80">{inc.message}</div>
+    <WidgetFrame title={title} value={incidents.length ? String(incidents.length) : null}>
+      {loading && incidents.length === 0 ? (
+        <WidgetMessage>Loading…</WidgetMessage>
+      ) : incidents.length === 0 ? (
+        <WidgetMessage>No incidents match this filter.</WidgetMessage>
+      ) : (
+        <div className="h-full space-y-1 overflow-auto">
+          {incidents.map((inc) => {
+            const sev = levelForSeverity(inc.severity);
+            const Icon = LEVEL[sev].icon;
+            return (
+              <div
+                key={inc.id}
+                className="flex items-start gap-2 rounded border border-line bg-inset p-1.5"
+              >
+                <Icon size={11} className="mt-0.5 shrink-0" style={{ color: LEVEL[sev].text }} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] text-ink">{inc.serverId}</span>
+                    <StatusBadge level={levelForIncidentStatus(inc.status)} showIcon={false}>
+                      {inc.status}
+                    </StatusBadge>
+                    <span className="ml-auto shrink-0 font-mono text-[9px] text-ink-subtle">
+                      {timeAgo(inc.createdAt)}
+                    </span>
                   </div>
+                  <div className="mt-0.5 truncate text-[11px] text-ink-muted">{inc.message}</div>
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </WidgetFrame>
   );
 }

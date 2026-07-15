@@ -1,117 +1,135 @@
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import { LEVEL, SERIES, levelForMetric, type MetricSpec } from '@/lib/status';
+import { StatusBadge } from '@/components/ui';
 
 interface MetricChartProps {
-  data: Array<{
-    time: string;
-    value: number | null;
-  }>;
-  label: string;
-  unit: string;
-  color: string;
-  warningThreshold?: number;
-  criticalThreshold?: number;
+  spec: MetricSpec;
+  data: Array<{ time: string; value: number | null }>;
 }
 
-function formatTime(isoStr: string): string {
-  const d = new Date(isoStr);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
 }
 
-export function MetricChart({
-  data,
-  label,
-  unit,
-  color,
-  warningThreshold,
-  criticalThreshold,
-}: MetricChartProps) {
+/**
+ * A single metric over time.
+ *
+ * Every one of these charts draws its line in the SAME hue. The old version gave
+ * each metric its own colour — including an amber latency line, which collided
+ * head-on with amber-means-warning. Here the line is always neutral blue and the
+ * only colour that varies is the threshold rules, so a chart turning colourful
+ * genuinely means something is wrong.
+ */
+export function MetricChart({ spec, data }: MetricChartProps) {
+  const latest = [...data].reverse().find((d) => d.value !== null)?.value ?? 0;
+  const level = levelForMetric(spec, latest);
+  const gradientId = `fill-${spec.key}`;
+
   return (
-    <div className="glass rounded-xl p-4 border border-zinc-800">
-      <div className="flex items-center justify-between mb-3">
-        <h4 className="text-sm font-semibold text-foreground">{label}</h4>
-        <div className="flex items-center gap-3">
-          {warningThreshold !== undefined && (
-            <div className="flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-amber-500" />
-              <span className="text-[10px] text-muted-foreground">Warning: {warningThreshold}{unit}</span>
-            </div>
-          )}
-          {criticalThreshold !== undefined && (
-            <div className="flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-red-500" />
-              <span className="text-[10px] text-muted-foreground">Critical: {criticalThreshold}{unit}</span>
-            </div>
-          )}
+    <div className="rounded-lg border border-line bg-card p-4">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-[12px] font-medium text-ink-muted">{spec.label}</h3>
+          <div className="mt-1.5 flex items-baseline gap-2">
+            <span
+              className="font-mono text-xl leading-none font-medium tabular-nums"
+              style={{ color: level === 'good' ? 'var(--color-ink)' : LEVEL[level].text }}
+            >
+              {latest.toFixed(spec.unit === 'ms' ? 0 : 1)}
+            </span>
+            <span className="text-[11px] text-ink-subtle">{spec.unit}</span>
+          </div>
         </div>
+        <StatusBadge level={level}>{LEVEL[level].label}</StatusBadge>
       </div>
-      <div className="h-48">
+
+      <div className="h-44">
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
+          {/* Right margin leaves room for the threshold labels to sit outside
+              the plot rather than being clipped by its edge. */}
+          <AreaChart data={data} margin={{ top: 4, right: 30, bottom: 0, left: 0 }}>
             <defs>
-              <linearGradient id={`gradient-${label}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={color} stopOpacity={0.3} />
-                <stop offset="95%" stopColor={color} stopOpacity={0} />
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={SERIES} stopOpacity={0.22} />
+                <stop offset="100%" stopColor={SERIES} stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+
+            {/* Recessive grid — it orients, it doesn't compete. */}
+            <CartesianGrid stroke="#1e1e24" strokeDasharray="0" vertical={false} />
+
             <XAxis
               dataKey="time"
               tickFormatter={formatTime}
-              tick={{ fill: '#71717a', fontSize: 10 }}
-              axisLine={{ stroke: '#27272a' }}
-              tickLine={{ stroke: '#27272a' }}
+              tick={{ fill: '#6e6e78', fontSize: 10 }}
+              axisLine={false}
+              tickLine={false}
+              minTickGap={40}
             />
             <YAxis
-              tick={{ fill: '#71717a', fontSize: 10 }}
-              axisLine={{ stroke: '#27272a' }}
-              tickLine={{ stroke: '#27272a' }}
-              width={40}
+              domain={[0, spec.max]}
+              tick={{ fill: '#6e6e78', fontSize: 10 }}
+              axisLine={false}
+              tickLine={false}
+              width={34}
             />
+
             <Tooltip
+              cursor={{ stroke: '#2b2b34', strokeWidth: 1 }}
               contentStyle={{
-                backgroundColor: '#18181b',
-                border: '1px solid #3f3f46',
-                borderRadius: '8px',
-                fontSize: '12px',
-                color: '#fafafa',
+                background: '#16161b',
+                border: '1px solid #2b2b34',
+                borderRadius: 8,
+                fontSize: 12,
+                padding: '8px 10px',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
               }}
-              formatter={(val) => [`${Number(val).toFixed(2)} ${unit}`, label]}
-              labelFormatter={(lbl) => formatTime(String(lbl))}
+              labelStyle={{ color: '#9a9aa4', fontSize: 11, marginBottom: 4 }}
+              itemStyle={{ color: '#ececf0' }}
+              formatter={(v) => [`${Number(v).toFixed(1)} ${spec.unit}`, spec.label]}
+              labelFormatter={(l) => formatTime(String(l))}
             />
-            {warningThreshold !== undefined && (
-              <Area
-                type="monotone"
-                dataKey={() => warningThreshold}
-                stroke="#f59e0b"
-                strokeDasharray="4 4"
-                strokeWidth={1}
-                fill="none"
-                dot={false}
-                activeDot={false}
-                isAnimationActive={false}
-              />
-            )}
-            {criticalThreshold !== undefined && (
-              <Area
-                type="monotone"
-                dataKey={() => criticalThreshold}
-                stroke="#ef4444"
-                strokeDasharray="4 4"
-                strokeWidth={1}
-                fill="none"
-                dot={false}
-                activeDot={false}
-                isAnimationActive={false}
-              />
-            )}
+
+            {/* Thresholds as reference lines, not fake series — a dataKey that
+                returns a constant pollutes the tooltip with phantom entries. */}
+            <ReferenceLine
+              y={spec.warn}
+              stroke={LEVEL.warn.mark}
+              strokeDasharray="3 3"
+              strokeOpacity={0.5}
+              label={{ value: 'warn', position: 'right', fill: LEVEL.warn.text, fontSize: 9 }}
+            />
+            <ReferenceLine
+              y={spec.critical}
+              stroke={LEVEL.critical.mark}
+              strokeDasharray="3 3"
+              strokeOpacity={0.5}
+              label={{ value: 'crit', position: 'right', fill: LEVEL.critical.text, fontSize: 9 }}
+            />
+
             <Area
               type="monotone"
               dataKey="value"
-              stroke={color}
+              stroke={SERIES}
               strokeWidth={2}
-              fill={`url(#gradient-${label})`}
+              fill={`url(#${gradientId})`}
               dot={false}
-              activeDot={{ r: 4, fill: color, stroke: '#18181b', strokeWidth: 2 }}
+              activeDot={{ r: 3.5, fill: SERIES, stroke: '#101014', strokeWidth: 2 }}
+              animationDuration={600}
+              connectNulls
             />
           </AreaChart>
         </ResponsiveContainer>

@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { ApolloProvider } from '@apollo/client/react';
 import { Toaster } from 'sonner';
 import { apolloClient } from '@/lib/apollo';
@@ -15,9 +15,7 @@ import { DashboardEditPage } from '@/pages/DashboardEditPage';
 import { OnCallAdminPage } from '@/pages/OnCallAdminPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  if (!isAuthenticated()) {
-    return <Navigate to="/login" replace />;
-  }
+  if (!isAuthenticated()) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
@@ -46,17 +44,23 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
+
+      {/* Toasts sit bottom-left: top-right is where the eye already is for page
+          actions, and a page landing under the cursor is a misclick waiting to
+          happen. Colour comes from the status palette, same as everywhere else. */}
       <Toaster
-        position="top-right"
+        position="bottom-left"
+        theme="dark"
+        closeButton
         toastOptions={{
           style: {
-            background: '#18181b',
-            border: '1px solid #3f3f46',
-            color: '#fafafa',
+            background: '#16161b',
+            border: '1px solid #2b2b34',
+            color: '#ececf0',
             fontSize: '13px',
+            borderRadius: '8px',
           },
         }}
-        theme="dark"
       />
     </ApolloProvider>
   );

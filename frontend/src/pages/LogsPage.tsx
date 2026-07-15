@@ -1,23 +1,23 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
-import {
-  Activity,
-  AlertOctagon,
-  AlertTriangle,
-  ChevronDown,
-  ChevronRight,
-  Info,
-  Pause,
-  Play,
-  RefreshCw,
-  Search,
-  Terminal,
-} from 'lucide-react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { ChevronRight, Pause, Play, RefreshCw, Search, Terminal } from 'lucide-react';
 import { GET_LOGS } from '@/graphql/logs';
 import { GET_SERVERS } from '@/graphql/queries';
 import { connectLogTail, type LogRecord } from '@/lib/sse';
 import { SavedFilterBar } from '@/components/filters/SavedFilterBar';
+import {
+  Button,
+  EmptyState,
+  IconButton,
+  LiveDot,
+  PageHeader,
+  Skeleton,
+} from '@/components/ui';
+import { LEVEL, levelForLogLevel } from '@/lib/status';
+import { formatClock } from '@/lib/format';
+import { cn } from '@/lib/utils';
 
 interface LogItem {
   time: string;
@@ -29,191 +29,147 @@ interface LogItem {
   traceId: string | null;
 }
 
-const LEVELS = ['DEBUG', 'INFO', 'WARN', 'WARNING', 'ERROR', 'FATAL'];
-
-function levelBadgeClass(level: string): string {
-  const l = level.toUpperCase();
-  if (l === 'FATAL' || l === 'ERROR') return 'bg-red-500/20 text-red-400';
-  if (l === 'WARN' || l === 'WARNING') return 'bg-amber-500/20 text-amber-400';
-  if (l === 'DEBUG') return 'bg-zinc-500/20 text-zinc-400';
-  return 'bg-emerald-500/10 text-emerald-400';
-}
-
-function levelIcon(level: string) {
-  const l = level.toUpperCase();
-  if (l === 'FATAL' || l === 'ERROR') return AlertOctagon;
-  if (l === 'WARN' || l === 'WARNING') return AlertTriangle;
-  return Info;
-}
+const LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL'];
+const MAX_LIVE_LINES = 500;
 
 export function LogsPage() {
-  const [searchParams] = useSearchParams();
-  const [serverId, setServerId] = useState<string>(searchParams.get('serverId') || '');
-  const [serviceFilter, setServiceFilter] = useState<string>('');
-  const [levelFilter, setLevelFilter] = useState<string[]>([]);
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [submittedQuery, setSubmittedQuery] = useState<string>('');
-  const [tailing, setTailing] = useState<boolean>(false);
+  const [params] = useSearchParams();
+  const reduced = useReducedMotion();
+
+  const [serverId, setServerId] = useState(params.get('serverId') ?? '');
+  const [service, setService] = useState('');
+  const [levels, setLevels] = useState<string[]>(
+    params.get('level') ? [params.get('level')!] : [],
+  );
+  const [query, setQuery] = useState('');
+  const [submitted, setSubmitted] = useState('');
+  const [tailing, setTailing] = useState(false);
   const [liveLogs, setLiveLogs] = useState<LogRecord[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const liveContainerRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Reset buffer + open tail in the same effect so the state reset
-    // doesn't cascade-render before the subscription starts.
+    // The buffer reset has to happen in the same effect as the subscribe: if it
+    // lived in its own effect it would flush a frame later and briefly show the
+    // previous server's lines under the new server's header.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLiveLogs([]);
     if (!tailing) return;
-    const close = connectLogTail(serverId || null, {
-      onLog: (rec) => {
+    return connectLogTail(serverId || null, {
+      onLog: (rec) =>
         setLiveLogs((prev) => {
           const next = [...prev, rec];
-          if (next.length > 500) next.splice(0, next.length - 500);
-          return next;
-        });
-      },
+          return next.length > MAX_LIVE_LINES ? next.slice(-MAX_LIVE_LINES) : next;
+        }),
     });
-    return () => close();
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset is paired with subscribe
   }, [serverId, tailing]);
 
-  // Auto-scroll the live tail to the bottom on new lines
-  useEffect(() => {
-    if (!tailing || !liveContainerRef.current) return;
-    liveContainerRef.current.scrollTop = liveContainerRef.current.scrollHeight;
-  }, [liveLogs, tailing]);
-
   const { data: serversData } = useQuery(GET_SERVERS, { pollInterval: 10000 });
-  const servers: { serverId: string }[] = (serversData as any)?.servers || [];
+  const servers: { serverId: string }[] = (serversData as any)?.servers ?? [];
 
-  const {
-    data: logsData,
-    loading: logsLoading,
-    refetch: refetchLogs,
-  } = useQuery(GET_LOGS, {
+  const { data, loading, refetch } = useQuery(GET_LOGS, {
     variables: {
       serverId: serverId || undefined,
-      service: serviceFilter || undefined,
-      levels: levelFilter.length > 0 ? levelFilter : undefined,
-      query: submittedQuery || undefined,
+      service: service || undefined,
+      levels: levels.length ? levels : undefined,
+      query: submitted || undefined,
       limit: 200,
     },
     skip: tailing,
     fetchPolicy: 'cache-and-network',
   });
 
-  const logs: LogItem[] = (logsData as any)?.logs?.items || [];
+  const queried: LogItem[] = (data as any)?.logs?.items ?? [];
 
-  const liveLogItems: LogItem[] = useMemo(() => {
-    return liveLogs
-      .filter((r) => !levelFilter.length || levelFilter.includes(r.level.toUpperCase()))
-      .filter((r) => !serviceFilter || (r.service ?? '').includes(serviceFilter))
-      .map((r) => ({
-        time: r.time || r.timestamp || new Date().toISOString(),
-        serverId: r.server_id,
-        service: r.service ?? null,
-        level: r.level,
-        message: r.message,
-        fields: r.fields ? JSON.stringify(r.fields) : null,
-        traceId: r.trace_id ?? null,
-      }))
-      .reverse(); // newest first like the query path
-  }, [liveLogs, levelFilter, serviceFilter]);
+  const live: LogItem[] = useMemo(
+    () =>
+      liveLogs
+        .filter((r) => !levels.length || levels.includes(r.level.toUpperCase()))
+        .filter((r) => !service || (r.service ?? '').includes(service))
+        .map((r) => ({
+          time: r.time || r.timestamp || new Date().toISOString(),
+          serverId: r.server_id,
+          service: r.service ?? null,
+          level: r.level,
+          message: r.message,
+          fields: r.fields ? JSON.stringify(r.fields) : null,
+          traceId: r.trace_id ?? null,
+        }))
+        .reverse(),
+    [liveLogs, levels, service],
+  );
 
-  const displayLogs = tailing ? liveLogItems : logs;
+  const rows = tailing ? live : queried;
 
-  const toggleLevel = (lvl: string) => {
-    setLevelFilter((prev) =>
-      prev.includes(lvl) ? prev.filter((x) => x !== lvl) : [...prev, lvl]
-    );
-  };
+  // Newest-first ordering means new lines land at the top — so pin the scroll
+  // there rather than chasing the bottom.
+  useEffect(() => {
+    if (tailing && scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [live.length, tailing]);
 
-  const toggleExpanded = (key: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmittedQuery(searchQuery);
-  };
+  const toggle = <T,>(set: T[], v: T): T[] =>
+    set.includes(v) ? set.filter((x) => x !== v) : [...set, v];
 
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Terminal size={22} className="text-emerald-400" />
-            Logs
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Search and tail structured log lines from the fleet
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setTailing((t) => !t)}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-              tailing
-                ? 'bg-emerald-500/20 text-emerald-400'
-                : 'bg-zinc-800 text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {tailing ? <Pause size={14} /> : <Play size={14} />}
-            {tailing ? 'Pause Tail' : 'Live Tail'}
-            {tailing && (
-              <span className="flex items-center gap-1">
-                <Activity size={10} className="text-emerald-400" />
-                <span className="text-[10px] opacity-80">{liveLogs.length}</span>
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => refetchLogs()}
-            disabled={tailing}
-            className="p-2 rounded-lg hover:bg-zinc-800 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-            title="Refresh"
-          >
-            <RefreshCw size={16} />
-          </button>
-        </div>
-      </div>
-
-      {/* Filters */}
-      <div className="glass rounded-xl border border-zinc-800 p-4 mb-4 space-y-3">
-        <form onSubmit={handleSearch} className="flex gap-2">
-          <div className="flex-1 flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-lg px-3 focus-within:border-emerald-500/30">
-            <Search size={14} className="text-muted-foreground" />
-            <input
-              type="text"
-              placeholder="Full-text search (e.g. connection refused)"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+    <div className="flex h-screen flex-col p-6">
+      <PageHeader
+        title="Logs"
+        subtitle="Full-text search across the fleet, or tail it live."
+        actions={
+          <>
+            <Button
+              variant={tailing ? 'primary' : 'secondary'}
+              icon={tailing ? Pause : Play}
+              onClick={() => setTailing((t) => !t)}
+            >
+              {tailing ? 'Pause' : 'Live tail'}
+            </Button>
+            <IconButton
+              icon={RefreshCw}
+              label="Refresh"
+              onClick={() => refetch()}
               disabled={tailing}
-              className="flex-1 bg-transparent py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-50"
             />
-            {submittedQuery && !tailing && (
+          </>
+        }
+      />
+
+      <div className="mb-4 space-y-3 rounded-lg border border-line bg-card p-3.5">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setSubmitted(query);
+          }}
+          className="flex gap-2"
+        >
+          <div className="flex flex-1 items-center gap-2 rounded-md border border-line bg-inset px-3 focus-within:border-line-strong">
+            <Search size={14} className="shrink-0 text-ink-subtle" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              disabled={tailing}
+              placeholder="Search messages — e.g. connection refused"
+              className="flex-1 bg-transparent py-2 text-[13px] outline-none placeholder:text-ink-subtle disabled:opacity-50"
+            />
+            {submitted && !tailing && (
               <button
                 type="button"
                 onClick={() => {
-                  setSearchQuery('');
-                  setSubmittedQuery('');
+                  setQuery('');
+                  setSubmitted('');
                 }}
-                className="text-[10px] text-muted-foreground hover:text-foreground"
+                className="shrink-0 text-[10px] text-ink-subtle transition-colors hover:text-ink"
               >
                 CLEAR
               </button>
             )}
           </div>
+
           <select
             value={serverId}
             onChange={(e) => setServerId(e.target.value)}
-            className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-emerald-500/30"
+            className="field w-44"
           >
             <option value="">All servers</option>
             {servers.map((s) => (
@@ -222,170 +178,200 @@ export function LogsPage() {
               </option>
             ))}
           </select>
+
           <input
-            type="text"
+            value={service}
+            onChange={(e) => setService(e.target.value)}
             placeholder="service…"
-            value={serviceFilter}
-            onChange={(e) => setServiceFilter(e.target.value)}
-            className="w-32 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/30"
+            className="field w-32"
           />
         </form>
 
-        <SavedFilterBar
-          scope="logs"
-          currentFilter={{
-            serverId,
-            serviceFilter,
-            levelFilter,
-            query: submittedQuery,
-          }}
-          onApply={(f) => {
-            if (typeof f.serverId === 'string') setServerId(f.serverId);
-            if (typeof f.serviceFilter === 'string') setServiceFilter(f.serviceFilter);
-            if (Array.isArray(f.levelFilter)) setLevelFilter(f.levelFilter as string[]);
-            if (typeof f.query === 'string') {
-              setSearchQuery(f.query);
-              setSubmittedQuery(f.query);
-            }
-          }}
-        />
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {LEVELS.map((lvl) => {
+              const active = levels.includes(lvl);
+              const token = LEVEL[levelForLogLevel(lvl)];
+              return (
+                <button
+                  key={lvl}
+                  onClick={() => setLevels((s) => toggle(s, lvl))}
+                  aria-pressed={active}
+                  className={cn(
+                    'rounded px-2 py-1 font-mono text-[10px] font-medium transition-colors',
+                    !active && 'bg-inset text-ink-subtle hover:text-ink',
+                  )}
+                  style={active ? { background: token.tint, color: token.text } : undefined}
+                >
+                  {lvl}
+                </button>
+              );
+            })}
+            {levels.length > 0 && (
+              <button
+                onClick={() => setLevels([])}
+                className="ml-1 text-[10px] text-ink-subtle transition-colors hover:text-ink"
+              >
+                CLEAR
+              </button>
+            )}
+          </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Level:</span>
-          {LEVELS.map((lvl) => (
-            <button
-              key={lvl}
-              onClick={() => toggleLevel(lvl)}
-              className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
-                levelFilter.includes(lvl)
-                  ? levelBadgeClass(lvl)
-                  : 'bg-zinc-800 text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {lvl}
-            </button>
-          ))}
-          {levelFilter.length > 0 && (
-            <button
-              onClick={() => setLevelFilter([])}
-              className="text-[10px] text-muted-foreground hover:text-foreground ml-2"
-            >
-              CLEAR
-            </button>
-          )}
+          <div className="ml-auto">
+            <SavedFilterBar
+              scope="logs"
+              currentFilter={{ serverId, service, levels, query: submitted }}
+              onApply={(f) => {
+                if (typeof f.serverId === 'string') setServerId(f.serverId);
+                if (typeof f.service === 'string') setService(f.service);
+                if (Array.isArray(f.levels)) setLevels(f.levels as string[]);
+                if (typeof f.query === 'string') {
+                  setQuery(f.query);
+                  setSubmitted(f.query);
+                }
+              }}
+            />
+          </div>
         </div>
       </div>
 
-      {/* Logs table */}
       <div
-        ref={liveContainerRef}
-        className="glass rounded-xl border border-zinc-800 overflow-auto max-h-[calc(100vh-280px)]"
+        ref={scrollRef}
+        className="min-h-0 flex-1 overflow-auto rounded-lg border border-line bg-card"
       >
-        {logsLoading && displayLogs.length === 0 && !tailing ? (
-          <div className="p-8 space-y-2">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-8 bg-zinc-800/50 rounded animate-pulse" />
+        {loading && rows.length === 0 && !tailing ? (
+          <div className="space-y-1.5 p-4">
+            {Array.from({ length: 12 }).map((_, i) => (
+              <Skeleton key={i} className="h-6" />
             ))}
           </div>
-        ) : displayLogs.length === 0 ? (
-          <div className="p-16 text-center text-muted-foreground">
-            <Terminal size={36} className="mx-auto mb-3 opacity-20" />
-            <p className="text-sm">
-              {tailing
-                ? 'Waiting for live log lines…'
-                : 'No logs match the current filters.'}
-            </p>
-          </div>
+        ) : rows.length === 0 ? (
+          <EmptyState
+            icon={Terminal}
+            title={tailing ? 'Waiting for log lines' : 'No logs match these filters'}
+            hint={
+              tailing
+                ? 'The stream is open. Lines appear here the moment they are ingested.'
+                : 'Try widening the level filter or clearing the search.'
+            }
+          />
         ) : (
-          <table className="w-full text-xs">
-            <thead className="bg-zinc-900/80 sticky top-0 z-10">
-              <tr className="border-b border-zinc-800 text-left">
+          <table className="w-full">
+            <thead className="sticky top-0 z-10 bg-panel/95 backdrop-blur">
+              <tr className="border-b border-line">
                 <th className="w-6" />
-                <th className="px-3 py-2 font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">
-                  Time
-                </th>
-                <th className="px-3 py-2 font-medium text-muted-foreground uppercase tracking-wider">
-                  Level
-                </th>
-                <th className="px-3 py-2 font-medium text-muted-foreground uppercase tracking-wider">
-                  Server
-                </th>
-                <th className="px-3 py-2 font-medium text-muted-foreground uppercase tracking-wider">
-                  Service
-                </th>
-                <th className="px-3 py-2 font-medium text-muted-foreground uppercase tracking-wider">
-                  Message
-                </th>
+                {['Time', 'Level', 'Server', 'Service', 'Message'].map((h) => (
+                  <th
+                    key={h}
+                    className="px-3 py-2 text-left text-[10px] font-medium tracking-wider text-ink-subtle uppercase whitespace-nowrap"
+                  >
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-800/40 font-mono">
-              {displayLogs.map((log, idx) => {
-                const key = `${log.time}-${idx}`;
-                const isOpen = expanded.has(key);
-                const Icon = levelIcon(log.level);
-                return (
-                  <Fragment key={key}>
-                    <tr
-                      onClick={() => toggleExpanded(key)}
-                      className="hover:bg-zinc-800/40 cursor-pointer"
-                    >
-                      <td className="pl-2 text-muted-foreground">
-                        {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                      </td>
-                      <td className="px-3 py-1.5 text-muted-foreground whitespace-nowrap">
-                        {new Date(log.time).toISOString().split('T')[1]?.slice(0, 12)}
-                      </td>
-                      <td className="px-3 py-1.5">
-                        <span
-                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${levelBadgeClass(log.level)}`}
-                        >
-                          <Icon size={9} />
-                          {log.level.toUpperCase()}
-                        </span>
-                      </td>
-                      <td className="px-3 py-1.5 text-muted-foreground whitespace-nowrap">
-                        {log.serverId}
-                      </td>
-                      <td className="px-3 py-1.5 text-muted-foreground whitespace-nowrap">
-                        {log.service || '-'}
-                      </td>
-                      <td className="px-3 py-1.5 text-foreground/90 break-all">
-                        {log.message}
-                      </td>
-                    </tr>
-                    {isOpen && (
-                      <tr className="bg-zinc-900/50">
-                        <td colSpan={6} className="px-12 py-2 text-[11px] text-muted-foreground">
-                          {log.traceId && (
-                            <div className="mb-1">
-                              <span className="text-foreground/60">trace_id:</span>{' '}
-                              <span className="text-emerald-400">{log.traceId}</span>
-                            </div>
-                          )}
-                          {log.fields && (
-                            <pre className="whitespace-pre-wrap text-foreground/80 bg-zinc-800/60 rounded p-2 overflow-x-auto">
-                              {(() => {
-                                try {
-                                  return JSON.stringify(JSON.parse(log.fields), null, 2);
-                                } catch {
-                                  return log.fields;
-                                }
-                              })()}
-                            </pre>
-                          )}
-                          {!log.fields && !log.traceId && (
-                            <span className="italic">No structured fields.</span>
-                          )}
+
+            <tbody>
+              <AnimatePresence initial={false}>
+                {rows.map((log, i) => {
+                  const key = `${log.time}-${i}`;
+                  const open = expanded.has(key);
+                  const level = levelForLogLevel(log.level);
+                  const token = LEVEL[level];
+
+                  return (
+                    <Fragment key={key}>
+                      <motion.tr
+                        layout={tailing && !reduced}
+                        initial={tailing && !reduced ? { opacity: 0, x: -8 } : false}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                        onClick={() =>
+                          setExpanded((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(key)) next.delete(key);
+                            else next.add(key);
+                            return next;
+                          })
+                        }
+                        className="cursor-pointer border-b border-line/40 transition-colors hover:bg-elevated"
+                      >
+                        <td className="pl-2 text-ink-subtle">
+                          <motion.span
+                            className="block"
+                            animate={{ rotate: open ? 90 : 0 }}
+                            transition={{ duration: 0.15 }}
+                          >
+                            <ChevronRight size={12} />
+                          </motion.span>
                         </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
+                        <td className="px-3 py-1.5 font-mono text-[11px] whitespace-nowrap text-ink-subtle">
+                          {formatClock(log.time)}
+                        </td>
+                        <td className="px-3 py-1.5">
+                          <span
+                            className="rounded px-1.5 py-0.5 font-mono text-[10px] font-medium"
+                            style={{ background: token.tint, color: token.text }}
+                          >
+                            {log.level.toUpperCase()}
+                          </span>
+                        </td>
+                        <td className="px-3 py-1.5 font-mono text-[11px] whitespace-nowrap text-ink-muted">
+                          {log.serverId}
+                        </td>
+                        <td className="px-3 py-1.5 font-mono text-[11px] whitespace-nowrap text-ink-subtle">
+                          {log.service ?? '—'}
+                        </td>
+                        <td className="px-3 py-1.5 font-mono text-[11px] break-all text-ink">
+                          {log.message}
+                        </td>
+                      </motion.tr>
+
+                      {open && (
+                        <tr className="bg-inset">
+                          <td colSpan={6} className="px-10 py-2.5">
+                            {log.traceId && (
+                              <div className="mb-2 font-mono text-[11px]">
+                                <span className="text-ink-subtle">trace_id </span>
+                                <span className="text-ink">{log.traceId}</span>
+                              </div>
+                            )}
+                            {log.fields ? (
+                              <pre className="overflow-x-auto rounded border border-line bg-card p-2.5 font-mono text-[10px] leading-relaxed text-ink-muted">
+                                {(() => {
+                                  try {
+                                    return JSON.stringify(JSON.parse(log.fields), null, 2);
+                                  } catch {
+                                    return log.fields;
+                                  }
+                                })()}
+                              </pre>
+                            ) : (
+                              !log.traceId && (
+                                <span className="text-[11px] text-ink-subtle italic">
+                                  No structured fields on this line.
+                                </span>
+                              )
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </AnimatePresence>
             </tbody>
           </table>
         )}
       </div>
+
+      {tailing && (
+        <div className="mt-2 flex items-center gap-2 text-[11px] text-ink-muted">
+          <LiveDot level="good" />
+          Tailing {serverId || 'all servers'} · {liveLogs.length} line
+          {liveLogs.length === 1 ? '' : 's'} buffered
+        </div>
+      )}
     </div>
   );
 }

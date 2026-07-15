@@ -1,6 +1,15 @@
-import { Server, Activity, HardDrive, Clock, AlertTriangle, AlertOctagon } from 'lucide-react';
-import { MetricGauge } from './MetricGauge';
 import { useNavigate } from 'react-router-dom';
+import { motion, useReducedMotion } from 'motion/react';
+import { ArrowUpRight } from 'lucide-react';
+import {
+  LEVEL,
+  METRICS,
+  SERIES,
+  levelForMetric,
+  levelForServer,
+} from '@/lib/status';
+import { fadeUp, snappy, useCountUp } from '@/lib/motion';
+import { Meter, Sparkline, StatusBadge } from '@/components/ui';
 
 interface ServerCardProps {
   serverId: string;
@@ -9,116 +18,119 @@ interface ServerCardProps {
   disk: number;
   latencyMs: number;
   incidentCount?: number;
+  /** CPU samples accumulated from the dashboard's own polling. */
+  history: number[];
 }
 
-function getOverallStatus(cpu: number, memory: number, latencyMs: number): 'healthy' | 'warning' | 'critical' {
-  if (cpu > 90 || memory > 95) return 'critical';
-  if (cpu > 80 || memory > 85 || latencyMs > 800) return 'warning';
-  return 'healthy';
-}
-
-const statusConfig = {
-  healthy: {
-    border: 'border-emerald-500/20',
-    glow: 'shadow-emerald-500/5',
-    dot: 'bg-emerald-500',
-    label: 'Healthy',
-    icon: Server,
-  },
-  warning: {
-    border: 'border-amber-500/30',
-    glow: 'shadow-amber-500/5',
-    dot: 'bg-amber-500',
-    label: 'Warning',
-    icon: AlertTriangle,
-  },
-  critical: {
-    border: 'border-red-500/30',
-    glow: 'shadow-red-500/10',
-    dot: 'bg-red-500 animate-pulse',
-    label: 'Critical',
-    icon: AlertOctagon,
-  },
-};
-
-export function ServerCard({ serverId, cpu, memory, disk, latencyMs, incidentCount = 0 }: ServerCardProps) {
+/**
+ * One box per server.
+ *
+ * The previous card gave equal billing to four radial gauges, which meant four
+ * tiny numbers and no answer to the only question you actually ask when you scan
+ * a fleet: *which one is hot?* So CPU is promoted to a headline with a trend, and
+ * the other three become bars — bars share a baseline, so a column of cards can
+ * be compared with your eyes instead of read one at a time.
+ */
+export function ServerCard({
+  serverId,
+  cpu,
+  memory,
+  disk,
+  latencyMs,
+  incidentCount = 0,
+  history,
+}: ServerCardProps) {
   const navigate = useNavigate();
-  const status = getOverallStatus(cpu, memory, latencyMs);
-  const config = statusConfig[status];
-  const StatusIcon = config.icon;
+  const reduced = useReducedMotion();
+
+  const level = levelForServer({ cpu, memory, disk, latencyMs });
+  const cpuLevel = levelForMetric(METRICS.cpu, cpu);
+  const token = LEVEL[level];
+  const cpuDisplay = useCountUp(cpu);
 
   return (
-    <div
+    <motion.button
+      variants={fadeUp}
+      whileHover={reduced ? undefined : { y: -2 }}
+      whileTap={reduced ? undefined : { scale: 0.995 }}
+      transition={snappy}
       onClick={() => navigate(`/server/${serverId}`)}
-      className={`
-        glass rounded-xl p-5 cursor-pointer
-        border ${config.border}
-        shadow-lg ${config.glow}
-        hover:shadow-xl hover:scale-[1.02]
-        transition-all duration-300 ease-out
-        animate-fade-in
-      `}
+      className="group relative w-full overflow-hidden rounded-lg border border-line bg-card p-4 text-left transition-colors duration-200 hover:border-line-strong"
     >
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-lg bg-zinc-800`}>
-            <StatusIcon size={18} className={status === 'critical' ? 'text-red-500' : status === 'warning' ? 'text-amber-500' : 'text-emerald-500'} />
-          </div>
-          <div>
-            <h3 className="font-semibold text-sm text-foreground">{serverId}</h3>
-            <div className="flex items-center gap-1.5 mt-0.5">
-              <span className={`w-2 h-2 rounded-full ${config.dot}`} />
-              <span className="text-xs text-muted-foreground">{config.label}</span>
-            </div>
+      {/* Status rail. The whole card doesn't need to turn red — a 2px edge is
+          enough to spot across a grid, and it keeps the data legible. */}
+      <span
+        className="absolute inset-y-0 left-0 w-[2px] transition-opacity duration-300"
+        style={{ background: token.mark, opacity: level === 'good' ? 0.35 : 1 }}
+      />
+
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate font-mono text-[13px] font-medium text-ink">{serverId}</div>
+          <div className="mt-1.5">
+            <StatusBadge level={level}>{token.label}</StatusBadge>
           </div>
         </div>
-        {incidentCount > 0 && (
-          <span className="px-2 py-1 rounded-md bg-red-500/10 text-red-400 text-xs font-medium">
-            {incidentCount} alert{incidentCount !== 1 ? 's' : ''}
-          </span>
-        )}
+
+        <div className="flex shrink-0 items-center gap-2">
+          {incidentCount > 0 && (
+            <StatusBadge level="critical">
+              {incidentCount} alert{incidentCount === 1 ? '' : 's'}
+            </StatusBadge>
+          )}
+          <ArrowUpRight
+            size={14}
+            className="text-ink-subtle opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+          />
+        </div>
       </div>
 
-      {/* Metrics Grid */}
-      <div className="grid grid-cols-4 gap-2">
-        <MetricGauge
-          value={cpu}
+      {/* CPU: the headline. Value on the left, shape on the right. */}
+      <div className="mb-4 flex items-end justify-between gap-4">
+        <div>
+          <div className="mb-1 text-[11px] font-medium text-ink-muted">CPU</div>
+          <div
+            className="font-mono text-[28px] leading-none font-medium tracking-[-0.02em] tabular-nums"
+            style={{ color: cpuLevel === 'good' ? 'var(--color-ink)' : LEVEL[cpuLevel].text }}
+          >
+            {cpuDisplay.toFixed(1)}
+            <span className="ml-0.5 text-sm text-ink-subtle">%</span>
+          </div>
+        </div>
+
+        <Sparkline
+          data={history}
+          width={128}
+          height={36}
           max={100}
-          label="CPU"
-          unit="%"
-          warningThreshold={80}
-          criticalThreshold={90}
-          size={80}
-        />
-        <MetricGauge
-          value={memory}
-          max={100}
-          label="Memory"
-          unit="%"
-          warningThreshold={85}
-          criticalThreshold={95}
-          size={80}
-        />
-        <MetricGauge
-          value={disk}
-          max={100}
-          label="Disk"
-          unit="%"
-          warningThreshold={80}
-          criticalThreshold={90}
-          size={80}
-        />
-        <MetricGauge
-          value={latencyMs}
-          max={2000}
-          label="Latency"
-          unit="ms"
-          warningThreshold={500}
-          criticalThreshold={800}
-          size={80}
+          color={SERIES}
+          guides={[
+            { value: METRICS.cpu.warn, color: LEVEL.warn.mark },
+            { value: METRICS.cpu.critical, color: LEVEL.critical.mark },
+          ]}
+          className="shrink-0"
         />
       </div>
-    </div>
+
+      <div className="grid grid-cols-3 gap-3 border-t border-line pt-3.5">
+        {(['memory', 'disk', 'latencyMs'] as const).map((key) => {
+          const spec = METRICS[key];
+          const value = { memory, disk, latencyMs }[key];
+          return (
+            <Meter
+              key={key}
+              compact
+              label={spec.label}
+              value={value}
+              max={spec.max}
+              unit={spec.unit}
+              warn={spec.warn}
+              critical={spec.critical}
+              level={levelForMetric(spec, value)}
+            />
+          );
+        })}
+      </div>
+    </motion.button>
   );
 }
