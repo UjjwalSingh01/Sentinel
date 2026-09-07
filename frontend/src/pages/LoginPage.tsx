@@ -36,7 +36,7 @@ export function LoginPage() {
       {/* Backdrop. Achromatic, slow, and behind everything — it sets a mood
           without spending any of the colour budget that health signals need. */}
       <div
-        className="pointer-events-none absolute inset-0 opacity-[0.035]"
+        className="pointer-events-none absolute inset-0 opacity-3.5"
         style={{
           backgroundImage:
             'linear-gradient(rgba(255,255,255,.5) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.5) 1px, transparent 1px)',
@@ -46,7 +46,7 @@ export function LoginPage() {
       />
       <motion.div
         aria-hidden
-        className="pointer-events-none absolute top-1/2 left-1/2 h-[560px] w-[560px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+        className="pointer-events-none absolute top-1/2 left-1/2 h-140 w-140 -translate-x-1/2 -translate-y-1/2 rounded-full"
         style={{
           background:
             'radial-gradient(circle, rgba(57,135,229,0.10) 0%, rgba(57,135,229,0) 65%)',
@@ -59,7 +59,7 @@ export function LoginPage() {
         variants={stagger(0.08, 0.1)}
         initial="hidden"
         animate="show"
-        className="relative z-10 w-full max-w-[380px]"
+        className="relative z-10 w-full max-w-95"
       >
         <motion.div variants={item} className="mb-8 text-center">
           <div className="mb-5 inline-grid h-11 w-11 place-items-center rounded-xl border border-line bg-card">

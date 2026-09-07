@@ -60,7 +60,7 @@ export function ServerCard({
       {/* Status rail. The whole card doesn't need to turn red — a 2px edge is
           enough to spot across a grid, and it keeps the data legible. */}
       <span
-        className="absolute inset-y-0 left-0 w-[2px] transition-opacity duration-300"
+        className="absolute inset-y-0 left-0 w-0.5 transition-opacity duration-300"
         style={{ background: token.mark, opacity: level === 'good' ? 0.35 : 1 }}
       />
 

@@ -4,6 +4,7 @@ import { Toaster } from 'sonner';
 import { apolloClient } from '@/lib/apollo';
 import { isAuthenticated } from '@/lib/auth';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { LandingPage } from '@/pages/LandingPage';
 import { LoginPage } from '@/pages/LoginPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { ServerDetailPage } from '@/pages/ServerDetailPage';
@@ -14,8 +15,11 @@ import { DashboardsPage } from '@/pages/DashboardsPage';
 import { DashboardEditPage } from '@/pages/DashboardEditPage';
 import { OnCallAdminPage } from '@/pages/OnCallAdminPage';
 
+/* A signed-out visitor lands on the marketing page rather than a bare login
+   form — the form is one click away from there, and someone arriving from a
+   link deserves to be told what this is before being asked for a password. */
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  if (!isAuthenticated()) return <Navigate to="/login" replace />;
+  if (!isAuthenticated()) return <Navigate to="/welcome" replace />;
   return <>{children}</>;
 }
 
@@ -24,6 +28,7 @@ export default function App() {
     <ApolloProvider client={apolloClient}>
       <BrowserRouter>
         <Routes>
+          <Route path="/welcome" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route
             element={
