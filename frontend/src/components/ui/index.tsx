@@ -21,12 +21,15 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const BUTTON_STYLES: Record<ButtonVariant, string> = {
+  // The accent earns its keep here: one saturated teal on the page, on the one
+  // control that matters. Dark ink on top of it, because #0F969C is bright
+  // enough that white text on it falls under 4.5:1.
   primary:
-    'bg-ink text-canvas hover:bg-white disabled:hover:bg-ink font-medium',
+    'bg-accent text-canvas hover:bg-accent-strong disabled:hover:bg-accent font-medium shadow-sm shadow-accent/20',
   secondary:
-    'bg-elevated text-ink border border-line hover:border-line-strong hover:bg-[#1b1b21]',
+    'bg-elevated/70 text-ink border border-line hover:border-line-strong hover:bg-elevated',
   ghost:
-    'text-ink-muted hover:text-ink hover:bg-elevated',
+    'text-ink-muted hover:text-ink hover:bg-elevated/70',
   // The one place a status hue touches a control: a destructive action, where
   // the colour *is* the warning.
   danger:
@@ -119,13 +122,14 @@ export function StatusBadge({ level, children, showIcon = true, className }: Sta
   );
 }
 
-/** A neutral, chrome-coloured pill — counts, types, tags. Carries no signal. */
+/** A neutral, chrome-coloured pill — counts, types, tags. Carries no signal.
+ *  Sits on the palette's slate so it stays quiet next to the teal accent. */
 export function Chip({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded px-1.5 py-0.5',
-        'bg-elevated text-[11px] font-medium text-ink-muted whitespace-nowrap',
+        'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5',
+        'bg-slate/35 text-[11px] font-medium text-ink-muted whitespace-nowrap',
         className,
       )}
     >
@@ -462,7 +466,7 @@ export function Tabs<T extends string>({ items, value, onChange, layoutId, class
             {active && (
               <motion.span
                 layoutId={layoutId}
-                className="absolute inset-0 rounded-md bg-elevated"
+                className="absolute inset-0 rounded-md border border-accent/20 bg-accent/12"
                 transition={snappy}
               />
             )}
@@ -496,12 +500,13 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="mb-6 flex items-start justify-between gap-4">
-      <div className="min-w-0">
-        <h1 className="text-[19px] leading-tight font-semibold tracking-[-0.01em] text-ink">
-          {title}
-        </h1>
-        {subtitle && <p className="mt-1 text-[13px] text-ink-muted">{subtitle}</p>}
+    /* A toolbar, not a masthead. The top bar already names the page, so this
+       row exists for the actions and the one line of context — it used to
+       spend ~90px repeating the page title at 19px on every screen. */
+    <div className="mb-2.5 flex items-center justify-between gap-4">
+      <div className="flex min-w-0 items-baseline gap-2.5">
+        <h1 className="text-[13px] font-medium text-ink">{title}</h1>
+        {subtitle && <p className="truncate text-[12px] text-ink-subtle">{subtitle}</p>}
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
     </div>

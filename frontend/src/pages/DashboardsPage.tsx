@@ -40,7 +40,7 @@ export function DashboardsPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-4">
       <PageHeader
         title="Dashboards"
         subtitle="Build your own views. Drag widgets around; each one polls on its own."

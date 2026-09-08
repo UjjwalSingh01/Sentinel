@@ -28,6 +28,17 @@ export function connectSSE(handlers: SSEHandlers): void {
   const url = `/api/events?token=${encodeURIComponent(token)}`;
   eventSource = new EventSource(url);
 
+  /* The indicator used to depend solely on the server's own `connected` event.
+     If that named event never arrived — or arrived before this listener was
+     attached — the console sat there reporting OFFLINE while incidents were
+     visibly streaming in, which is the worst possible lie for a status light
+     to tell. `onopen` fires when the transport is actually established, so it
+     is the honest source of truth; the custom event is kept as a second
+     confirmation. */
+  eventSource.onopen = () => {
+    handlers.onConnected?.();
+  };
+
   eventSource.addEventListener('connected', () => {
     console.info('[SSE] Connection established');
     handlers.onConnected?.();

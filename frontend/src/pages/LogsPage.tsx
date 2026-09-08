@@ -12,7 +12,6 @@ import {
   EmptyState,
   IconButton,
   LiveDot,
-  PageHeader,
   Skeleton,
 } from '@/components/ui';
 import { LEVEL, levelForLogLevel } from '@/lib/status';
@@ -102,6 +101,31 @@ export function LogsPage() {
 
   const rows = tailing ? live : queried;
 
+  /* --- Burst collapsing ---------------------------------------------------
+     A failing host does not emit one "connection refused" — it emits forty,
+     and the old table gave each one its own row, so a single fault could push
+     everything else off the screen. Consecutive identical lines fold into one
+     row carrying a count, which is both shorter and more informative: the
+     number *is* the signal. */
+  const grouped = useMemo(() => {
+    const out: (LogItem & { count: number; key: string })[] = [];
+    for (const r of rows) {
+      const last = out[out.length - 1];
+      if (
+        last &&
+        last.level === r.level &&
+        last.serverId === r.serverId &&
+        last.service === r.service &&
+        last.message === r.message
+      ) {
+        last.count += 1;
+        continue;
+      }
+      out.push({ ...r, count: 1, key: `${r.time}-${out.length}` });
+    }
+    return out;
+  }, [rows]);
+
   // Newest-first ordering means new lines land at the top — so pin the scroll
   // there rather than chasing the bottom.
   useEffect(() => {
@@ -112,30 +136,10 @@ export function LogsPage() {
     set.includes(v) ? set.filter((x) => x !== v) : [...set, v];
 
   return (
-    <div className="flex h-screen flex-col p-6">
-      <PageHeader
-        title="Logs"
-        subtitle="Full-text search across the fleet, or tail it live."
-        actions={
-          <>
-            <Button
-              variant={tailing ? 'primary' : 'secondary'}
-              icon={tailing ? Pause : Play}
-              onClick={() => setTailing((t) => !t)}
-            >
-              {tailing ? 'Pause' : 'Live tail'}
-            </Button>
-            <IconButton
-              icon={RefreshCw}
-              label="Refresh"
-              onClick={() => refetch()}
-              disabled={tailing}
-            />
-          </>
-        }
-      />
-
-      <div className="mb-4 space-y-3 rounded-lg border border-line bg-card p-3.5">
+    <div className="flex h-[calc(100vh-3rem)] flex-col gap-2 p-4">
+      {/* Filters and the tail control share one bar. The page title lives in
+          the top bar now, so this row is the first thing under the chrome. */}
+      <div className="shrink-0 space-y-2 rounded-lg border border-line bg-card p-2.5">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -184,6 +188,22 @@ export function LogsPage() {
             onChange={(e) => setService(e.target.value)}
             placeholder="service…"
             className="field w-32"
+          />
+
+          <Button
+            type="button"
+            variant={tailing ? 'primary' : 'secondary'}
+            icon={tailing ? Pause : Play}
+            onClick={() => setTailing((t) => !t)}
+            className="shrink-0"
+          >
+            {tailing ? 'Pause' : 'Live tail'}
+          </Button>
+          <IconButton
+            icon={RefreshCw}
+            label="Refresh"
+            onClick={() => refetch()}
+            disabled={tailing}
           />
         </form>
 
@@ -256,25 +276,33 @@ export function LogsPage() {
             }
           />
         ) : (
-          <table className="w-full">
-            <thead className="sticky top-0 z-10 bg-panel/95 backdrop-blur">
+          <table className="w-full table-fixed">
+            <thead className="sticky top-0 z-10 bg-inset/95 backdrop-blur">
               <tr className="border-b border-line">
                 <th className="w-6" />
-                {['Time', 'Level', 'Server', 'Service', 'Message'].map((h) => (
-                  <th
-                    key={h}
-                    className="px-3 py-2 text-left text-[10px] font-medium tracking-wider text-ink-subtle uppercase whitespace-nowrap"
-                  >
-                    {h}
-                  </th>
-                ))}
+                <th className="w-20 px-2 py-1.5 text-left text-[10px] font-medium tracking-wider text-ink-subtle uppercase">
+                  Time
+                </th>
+                <th className="w-16 px-2 py-1.5 text-left text-[10px] font-medium tracking-wider text-ink-subtle uppercase">
+                  Level
+                </th>
+                {/* Host and service were two wide fixed columns pushing the
+                    message — the thing you actually read — past the halfway
+                    mark of the screen. One column, one line, and the message
+                    gets everything that is left. */}
+                <th className="w-56 px-2 py-1.5 text-left text-[10px] font-medium tracking-wider text-ink-subtle uppercase">
+                  Source
+                </th>
+                <th className="px-2 py-1.5 text-left text-[10px] font-medium tracking-wider text-ink-subtle uppercase">
+                  Message
+                </th>
               </tr>
             </thead>
 
             <tbody>
               <AnimatePresence initial={false}>
-                {rows.map((log, i) => {
-                  const key = `${log.time}-${i}`;
+                {grouped.map((log) => {
+                  const key = log.key;
                   const open = expanded.has(key);
                   const level = levelForLogLevel(log.level);
                   const token = LEVEL[level];
@@ -294,7 +322,7 @@ export function LogsPage() {
                             return next;
                           })
                         }
-                        className="cursor-pointer border-b border-line/40 transition-colors hover:bg-elevated"
+                        className="cursor-pointer border-b border-line/40 transition-colors hover:bg-row"
                       >
                         <td className="pl-2 text-ink-subtle">
                           <motion.span
@@ -302,34 +330,47 @@ export function LogsPage() {
                             animate={{ rotate: open ? 90 : 0 }}
                             transition={{ duration: 0.15 }}
                           >
-                            <ChevronRight size={12} />
+                            <ChevronRight size={11} />
                           </motion.span>
                         </td>
-                        <td className="px-3 py-1.5 font-mono text-[11px] whitespace-nowrap text-ink-subtle">
+                        <td className="px-2 py-1 font-mono text-[10.5px] whitespace-nowrap text-ink-subtle tabular-nums">
                           {formatClock(log.time)}
                         </td>
-                        <td className="px-3 py-1.5">
+                        <td className="px-2 py-1">
                           <span
-                            className="rounded px-1.5 py-0.5 font-mono text-[10px] font-medium"
+                            className="rounded px-1 py-px font-mono text-[9.5px] font-medium"
                             style={{ background: token.tint, color: token.text }}
                           >
                             {log.level.toUpperCase()}
                           </span>
                         </td>
-                        <td className="px-3 py-1.5 font-mono text-[11px] whitespace-nowrap text-ink-muted">
-                          {log.serverId}
+                        <td className="truncate px-2 py-1 font-mono text-[10.5px] whitespace-nowrap">
+                          <span className="text-ink-muted">{log.serverId}</span>
+                          {log.service && (
+                            <span className="text-ink-subtle"> · {log.service}</span>
+                          )}
                         </td>
-                        <td className="px-3 py-1.5 font-mono text-[11px] whitespace-nowrap text-ink-subtle">
-                          {log.service ?? '—'}
-                        </td>
-                        <td className="px-3 py-1.5 font-mono text-[11px] break-all text-ink">
-                          {log.message}
+                        <td className="px-2 py-1 font-mono text-[11px] text-ink">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate" title={log.message}>
+                              {log.message}
+                            </span>
+                            {log.count > 1 && (
+                              <span
+                                className="shrink-0 rounded px-1 py-px font-mono text-[9.5px] font-medium tabular-nums"
+                                style={{ background: token.tint, color: token.text }}
+                                title={`${log.count} identical lines in a row`}
+                              >
+                                ×{log.count}
+                              </span>
+                            )}
+                          </div>
                         </td>
                       </motion.tr>
 
                       {open && (
                         <tr className="bg-inset">
-                          <td colSpan={6} className="px-10 py-2.5">
+                          <td colSpan={5} className="px-10 py-2.5">
                             {log.traceId && (
                               <div className="mb-2 font-mono text-[11px]">
                                 <span className="text-ink-subtle">trace_id </span>

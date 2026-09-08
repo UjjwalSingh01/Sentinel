@@ -104,7 +104,7 @@ export function RulesPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-4">
       <PageHeader
         title="Alert rules"
         subtitle="Edit a rule and the running processor picks it up within seconds — no restart."

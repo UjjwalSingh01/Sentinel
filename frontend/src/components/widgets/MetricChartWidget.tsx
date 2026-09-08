@@ -74,29 +74,29 @@ export function MetricChartWidget({ config }: { config: MetricChartConfig }) {
                 <stop offset="100%" stopColor={SERIES} stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid stroke="#1e1e24" vertical={false} />
+            <CartesianGrid stroke="var(--color-line)" vertical={false} />
             <XAxis
               dataKey="time"
-              tick={{ fontSize: 9, fill: '#6e6e78' }}
+              tick={{ fontSize: 9, fill: 'var(--color-ink-subtle)' }}
               axisLine={false}
               tickLine={false}
               minTickGap={28}
             />
             <YAxis
               domain={[0, spec.max]}
-              tick={{ fontSize: 9, fill: '#6e6e78' }}
+              tick={{ fontSize: 9, fill: 'var(--color-ink-subtle)' }}
               axisLine={false}
               tickLine={false}
             />
             <Tooltip
               contentStyle={{
-                background: '#16161b',
-                border: '1px solid #2b2b34',
+                background: 'var(--color-elevated)',
+                border: '1px solid var(--color-line-strong)',
                 borderRadius: 6,
                 fontSize: 11,
               }}
-              labelStyle={{ color: '#9a9aa4' }}
-              itemStyle={{ color: '#ececf0' }}
+              labelStyle={{ color: 'var(--color-ink-muted)' }}
+              itemStyle={{ color: 'var(--color-ink)' }}
               formatter={(v) => [`${Number(v).toFixed(1)} ${spec.unit}`, spec.label]}
             />
             <ReferenceLine

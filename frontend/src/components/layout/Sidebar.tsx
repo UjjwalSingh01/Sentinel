@@ -1,20 +1,28 @@
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { motion } from 'motion/react';
 import {
   AlertTriangle,
   LayoutDashboard,
   LayoutGrid,
-  LogOut,
   Phone,
   Shield,
   SlidersHorizontal,
   Terminal,
   type LucideIcon,
 } from 'lucide-react';
-import { getUser, logout } from '@/lib/auth';
+import { getUser } from '@/lib/auth';
 import { snappy } from '@/lib/motion';
-import { LiveDot } from '@/components/ui';
 import { cn } from '@/lib/utils';
+
+/* ---------------------------------------------------------------------------
+   Navigation, and nothing else.
+
+   The sidebar used to also carry the connection indicator and the account
+   card, which pushed the actual navigation into the middle third of the column
+   and duplicated state the top bar is better placed to own. Stripped back to
+   what it is for, it fits in 200px with 30px rows — and the whole nav is
+   visible without the eye travelling.
+--------------------------------------------------------------------------- */
 
 interface NavItem {
   to: string;
@@ -33,14 +41,7 @@ const PRIMARY: NavItem[] = [
 
 const ADMIN: NavItem[] = [{ to: '/admin/on-call', label: 'On-Call', icon: Phone }];
 
-interface SidebarProps {
-  /** Live count of unresolved incidents, shown against the Incidents item. */
-  openIncidents: number;
-  connected: boolean;
-}
-
-export function Sidebar({ openIncidents, connected }: SidebarProps) {
-  const navigate = useNavigate();
+export function Sidebar({ openIncidents }: { openIncidents: number }) {
   const location = useLocation();
   const user = getUser();
   const adminItems = user?.role === 'admin' ? ADMIN : [];
@@ -66,9 +67,9 @@ export function Sidebar({ openIncidents, connected }: SidebarProps) {
         to={item.to}
         end={item.end}
         className={cn(
-          'relative flex items-center gap-2.5 rounded-md px-2.5 py-2',
-          'text-[13px] font-medium transition-colors duration-150',
-          active ? 'text-ink' : 'text-ink-muted hover:text-ink',
+          'relative flex h-7.5 items-center gap-2.5 rounded-md px-2.5',
+          'text-[13px] transition-colors duration-150',
+          active ? 'font-medium text-ink' : 'text-ink-muted hover:text-ink',
         )}
       >
         {/* One indicator element, shared across every nav item. Because it has a
@@ -77,21 +78,26 @@ export function Sidebar({ openIncidents, connected }: SidebarProps) {
         {active && (
           <motion.span
             layoutId="nav-indicator"
-            className="absolute inset-0 rounded-md border border-line bg-elevated"
+            className="absolute inset-0 overflow-hidden rounded-md border border-accent/25 bg-accent/12"
             transition={snappy}
-          />
+          >
+            <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-accent" />
+          </motion.span>
         )}
-        <item.icon size={15} className="relative shrink-0" />
-        <span className="relative">{item.label}</span>
+        <item.icon
+          size={14}
+          className={cn('relative shrink-0 transition-colors', active && 'text-accent-text')}
+        />
+        <span className="relative truncate">{item.label}</span>
         {showBadge && (
           <motion.span
             initial={{ scale: 0.6, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={snappy}
             className="relative ml-auto rounded px-1.5 py-0.5 font-mono text-[10px] font-medium tabular-nums"
-            style={{ background: 'rgba(208,59,59,0.14)', color: '#f0716f' }}
+            style={{ background: 'rgba(208,59,59,0.16)', color: '#f0716f' }}
           >
-            {openIncidents}
+            {openIncidents > 99 ? '99+' : openIncidents}
           </motion.span>
         )}
       </NavLink>
@@ -99,43 +105,27 @@ export function Sidebar({ openIncidents, connected }: SidebarProps) {
   };
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-40 flex w-56 flex-col border-r border-line bg-panel">
-      <div className="flex items-center gap-2.5 px-4 py-4">
-        <div className="grid h-7 w-7 place-items-center rounded-md bg-elevated">
-          <Shield size={15} className="text-ink" />
+    <aside className="fixed inset-y-0 left-0 z-40 flex w-50 flex-col border-r border-line bg-panel/85 backdrop-blur-xl">
+      <div className="flex h-12 items-center gap-2.5 border-b border-line px-3.5">
+        <div
+          className="grid h-6 w-6 place-items-center rounded-md shadow-sm shadow-black/40"
+          style={{
+            background: 'linear-gradient(145deg, var(--color-accent), var(--color-accent-deep))',
+          }}
+        >
+          <Shield size={13} className="text-canvas" />
         </div>
-        <div className="min-w-0">
-          <div className="text-[13px] leading-none font-semibold tracking-[-0.01em] text-ink">
-            Sentinel
-          </div>
-          <div className="mt-1 text-[10px] leading-none tracking-wide text-ink-subtle uppercase">
-            Observability
-          </div>
-        </div>
+        <span className="text-[13px] leading-none font-semibold tracking-[-0.01em] text-ink">
+          Sentinel
+        </span>
       </div>
 
-      {/* Connection state. Green here is a status, not decoration — it's the
-          answer to "am I actually looking at live data?" */}
-      <div className="mx-4 mb-3 flex items-center gap-2 rounded-md border border-line bg-card px-2.5 py-1.5">
-        {connected ? (
-          <>
-            <LiveDot level="good" />
-            <span className="text-[11px] font-medium text-ink-muted">Live stream</span>
-          </>
-        ) : (
-          <>
-            <span className="block h-1.5 w-1.5 rounded-full bg-ink-subtle" />
-            <span className="text-[11px] font-medium text-ink-subtle">Reconnecting…</span>
-          </>
-        )}
-      </div>
-
-      <nav className="flex-1 space-y-0.5 px-3">
+      <nav className="flex-1 space-y-px overflow-y-auto p-2">
         {PRIMARY.map(renderItem)}
 
         {adminItems.length > 0 && (
           <>
-            <div className="px-2.5 pt-5 pb-1.5 text-[10px] font-medium tracking-wider text-ink-subtle uppercase">
+            <div className="px-2.5 pt-4 pb-1 text-[10px] font-medium tracking-wider text-ink-subtle uppercase">
               Admin
             </div>
             {adminItems.map(renderItem)}
@@ -143,25 +133,8 @@ export function Sidebar({ openIncidents, connected }: SidebarProps) {
         )}
       </nav>
 
-      <div className="m-3 flex items-center gap-2.5 rounded-md border border-line bg-card p-2.5">
-        <div className="grid h-7 w-7 shrink-0 place-items-center rounded bg-elevated font-mono text-[11px] font-medium text-ink">
-          {user?.name?.charAt(0).toUpperCase() ?? 'U'}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[12px] font-medium text-ink">{user?.name ?? 'User'}</div>
-          <div className="truncate text-[10px] text-ink-subtle">{user?.role ?? ''}</div>
-        </div>
-        <button
-          onClick={() => {
-            logout();
-            navigate('/login');
-          }}
-          title="Sign out"
-          aria-label="Sign out"
-          className="grid h-7 w-7 shrink-0 place-items-center rounded text-ink-subtle transition-colors hover:bg-elevated hover:text-ink"
-        >
-          <LogOut size={14} />
-        </button>
+      <div className="border-t border-line px-3.5 py-2.5 font-mono text-[10px] text-ink-subtle">
+        {user?.name ?? 'Signed in'} · {user?.role ?? ''}
       </div>
     </aside>
   );

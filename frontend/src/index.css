@@ -49,6 +49,18 @@
   --color-crit: #d03b3b;
   --color-crit-text: #f0716f;
 
+  /* Accent — the console's interactive hue. Declared globally so Tailwind
+     generates bg-/text-/border-accent utilities, but only ever *used* inside
+     the console theme below. */
+  --color-accent: #0f969c;
+  --color-accent-strong: #16b3ba;
+  --color-accent-deep: #0c7075;
+  --color-accent-text: #3fc8ce;
+  --color-slate: #294d61;
+  --color-slate-text: #9bb6c4;
+  /* Defined here so `bg-row` exists as a utility; the console overrides it. */
+  --color-row: #16161b;
+
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
@@ -64,9 +76,101 @@
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 }
 
+/* ---------------------------------------------------------------------------
+   Console theme — "deep water"
+   ---------------------------------------------------------------------------
+   The signed-in application re-tints the entire system around a teal palette.
+   It is applied by AppLayout as an attribute on <html> rather than a wrapper
+   div, for two reasons: the modals and the command palette render through
+   portals into <body>, which a wrapper would not reach; and the marketing
+   surfaces (landing, sign-in, the policy pages) simply never set it, so they
+   keep the original achromatic system untouched.
+
+   Every token below is either a palette colour or a mix of two of them, so the
+   whole console is built from six values:
+
+     #05161A  #072E33  #0C7075  #0F969C  #6DA5C0  #294D61
+
+   The colour discipline from the achromatic system survives the change, and
+   matters more now than it did: teal is chrome, so it can never mean "healthy".
+   Green, amber and red still belong to status alone, and the one hue that was
+   spent on data (charts, sparklines, meters) moves to #6DA5C0 so a plotted line
+   is never mistaken for a control.
+--------------------------------------------------------------------------- */
+html[data-app='console'] {
+  /* Surfaces — a deliberately WIDE ladder.
+     The first pass kept every step within a few points of #05161A, and the
+     result was flat: card, hovered row, input well and page background all
+     read as one dark mass, so nothing looked clickable and tables lost their
+     structure. These steps are spaced far enough apart to be told apart at a
+     glance, anchored on the palette's two darkest colours — the canvas is
+     #05161A pushed down so cards genuinely lift off it, and --color-card is
+     #072E33 itself. */
+  --color-canvas: #03121a;
+  --color-panel: #061e26;
+  --color-card: #082b33;
+  --color-elevated: #0e3d46;
+  --color-inset: #020d12;
+
+  /* The fill a table row takes on hover. Dense rows need a hit state that is
+     obvious without a border. */
+  --color-row: #0b343d;
+
+  /* Hairlines — brighter than the first pass, because a dense table is drawn
+     almost entirely out of its rules. */
+  --color-line: #11434c;
+  --color-line-strong: #1c5e69;
+
+  /* Ink — neutral greys would read as dirt against teal, so each step keeps a
+     trace of the palette in it. */
+  --color-ink: #edf7f8;
+  --color-ink-muted: #a9c8cd;
+  --color-ink-subtle: #74999f;
+
+  /* Data. #6DA5C0 is the only hue that plots a value. */
+  --color-series: #6da5c0;
+  --color-series-text: #8fbfd6;
+
+  /* Softer corners than the marketing side — the console is a dense surface,
+     and a slightly larger radius keeps the density from reading as hard. */
+  --radius-lg: 0.875rem;
+  --radius-xl: 1.125rem;
+}
+
 @layer base {
   :root {
     color-scheme: dark;
+  }
+
+  /* Depth. Two very low-opacity pools of light stop the canvas from being a
+     flat black rectangle behind everything; fixed attachment means they belong
+     to the window rather than sliding around as content scrolls. */
+  /* Depth, dialled back. The first pass used this hard enough to wash out the
+     contrast between surfaces; at these opacities it gives the canvas a sense
+     of space without lifting its luminance into the cards' range. */
+  html[data-app='console'] body {
+    background-image:
+      radial-gradient(1000px 560px at 14% -14%, rgba(15, 150, 156, 0.07), transparent 60%),
+      radial-gradient(820px 480px at 104% 2%, rgba(41, 77, 97, 0.12), transparent 56%);
+    background-attachment: fixed;
+  }
+
+  html[data-app='console'] :focus-visible {
+    outline-color: var(--color-accent-strong);
+  }
+
+  html[data-app='console'] ::selection {
+    background: color-mix(in srgb, var(--color-accent) 38%, transparent);
+  }
+
+  html[data-app='console'] ::-webkit-scrollbar-thumb {
+    background: #14555d;
+    background-clip: content-box;
+  }
+
+  html[data-app='console'] ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-accent-deep);
+    background-clip: content-box;
   }
 
   * {
@@ -176,6 +280,25 @@
   .field:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  /* Console surfaces catch a hairline of light along their top edge. It is the
+     cheapest way to make a flat fill read as a raised surface without
+     reintroducing the drop shadows the system deliberately avoids.
+
+     This deliberately targets the utility class as well as the .panel
+     component: cards in this app are built both ways, and one rule here keeps
+     them identical rather than requiring an edit in twenty files. */
+  html[data-app='console'] .panel,
+  html[data-app='console'] .bg-card {
+    box-shadow: inset 0 1px 0 rgba(234, 246, 247, 0.05);
+  }
+
+  /* A focused field is the one place the accent is allowed to glow. */
+  html[data-app='console'] .field:focus {
+    border-color: var(--color-accent);
+    background-color: var(--color-elevated);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 16%, transparent);
   }
 }
 

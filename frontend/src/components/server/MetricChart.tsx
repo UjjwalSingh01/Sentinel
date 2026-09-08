@@ -69,36 +69,36 @@ export function MetricChart({ spec, data }: MetricChartProps) {
             </defs>
 
             {/* Recessive grid — it orients, it doesn't compete. */}
-            <CartesianGrid stroke="#1e1e24" strokeDasharray="0" vertical={false} />
+            <CartesianGrid stroke="var(--color-line)" strokeDasharray="0" vertical={false} />
 
             <XAxis
               dataKey="time"
               tickFormatter={formatTime}
-              tick={{ fill: '#6e6e78', fontSize: 10 }}
+              tick={{ fill: 'var(--color-ink-subtle)', fontSize: 10 }}
               axisLine={false}
               tickLine={false}
               minTickGap={40}
             />
             <YAxis
               domain={[0, spec.max]}
-              tick={{ fill: '#6e6e78', fontSize: 10 }}
+              tick={{ fill: 'var(--color-ink-subtle)', fontSize: 10 }}
               axisLine={false}
               tickLine={false}
               width={34}
             />
 
             <Tooltip
-              cursor={{ stroke: '#2b2b34', strokeWidth: 1 }}
+              cursor={{ stroke: 'var(--color-line-strong)', strokeWidth: 1 }}
               contentStyle={{
-                background: '#16161b',
-                border: '1px solid #2b2b34',
+                background: 'var(--color-elevated)',
+                border: '1px solid var(--color-line-strong)',
                 borderRadius: 8,
                 fontSize: 12,
                 padding: '8px 10px',
                 boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
               }}
-              labelStyle={{ color: '#9a9aa4', fontSize: 11, marginBottom: 4 }}
-              itemStyle={{ color: '#ececf0' }}
+              labelStyle={{ color: 'var(--color-ink-muted)', fontSize: 11, marginBottom: 4 }}
+              itemStyle={{ color: 'var(--color-ink)' }}
               formatter={(v) => [`${Number(v).toFixed(1)} ${spec.unit}`, spec.label]}
               labelFormatter={(l) => formatTime(String(l))}
             />
@@ -127,7 +127,7 @@ export function MetricChart({ spec, data }: MetricChartProps) {
               strokeWidth={2}
               fill={`url(#${gradientId})`}
               dot={false}
-              activeDot={{ r: 3.5, fill: SERIES, stroke: '#101014', strokeWidth: 2 }}
+              activeDot={{ r: 3.5, fill: SERIES, stroke: 'var(--color-card)', strokeWidth: 2 }}
               animationDuration={600}
               connectNulls
             />

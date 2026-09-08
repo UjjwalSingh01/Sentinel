@@ -3,11 +3,13 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
-import { Search } from 'lucide-react';
+
 import { GET_INCIDENTS } from '@/graphql/queries';
 import { connectSSE, disconnectSSE } from '@/lib/sse';
 import { LiveContext, type LiveState } from '@/lib/live';
+import { RangeContext, type RangeState, type RangeValue } from '@/lib/range';
 import { Sidebar } from './Sidebar';
+import { TopBar } from './TopBar';
 import { CommandPalette } from './CommandPalette';
 
 export function AppLayout() {
@@ -15,6 +17,7 @@ export function AppLayout() {
   const [connected, setConnected] = useState(false);
   const [revision, setRevision] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [range, setRange] = useState<RangeValue>('15m');
 
   // The sidebar badge needs a fleet-wide open count regardless of which page
   // you're on, so the count is owned here rather than by any one page.
@@ -65,6 +68,17 @@ export function AppLayout() {
     };
   }, [handleNewIncident, handleIncidentUpdated]);
 
+  /* The console runs on its own palette. The flag goes on <html> rather than a
+     wrapper element so that the modals and the command palette — which render
+     through portals into <body> — are inside the theme too. Marketing surfaces
+     never set it, so they keep the achromatic system. */
+  useEffect(() => {
+    document.documentElement.dataset.app = 'console';
+    return () => {
+      delete document.documentElement.dataset.app;
+    };
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -76,17 +90,25 @@ export function AppLayout() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  const refresh = useCallback(() => setRevision((r) => r + 1), []);
+
   const live: LiveState = useMemo(
-    () => ({ connected, revision, openIncidents }),
-    [connected, revision, openIncidents],
+    () => ({ connected, revision, openIncidents, refresh }),
+    [connected, revision, openIncidents, refresh],
   );
+
+  const rangeState: RangeState = useMemo(() => ({ range, setRange }), [range]);
 
   return (
     <LiveContext.Provider value={live}>
+      <RangeContext.Provider value={rangeState}>
       <div className="min-h-screen bg-canvas">
-        <Sidebar openIncidents={openIncidents} connected={connected} />
+        <Sidebar openIncidents={openIncidents} />
 
-        <main className="ml-56 min-h-screen">
+        <div className="ml-50 flex min-h-screen flex-col">
+          <TopBar onOpenSearch={() => setPaletteOpen(true)} />
+
+          <main className="relative min-h-0 flex-1">
           {/* Route transition. The body fades up on entry — enough to signal
               "this is a new surface" without making navigation feel slow. */}
           <AnimatePresence mode="wait">
@@ -100,23 +122,12 @@ export function AppLayout() {
               <Outlet />
             </motion.div>
           </AnimatePresence>
-        </main>
-
-        {/* Persistent affordance for ⌘K — a shortcut nobody knows about is not
-            a feature. */}
-        <button
-          onClick={() => setPaletteOpen(true)}
-          className="fixed right-5 bottom-5 z-30 flex items-center gap-2 rounded-lg border border-line bg-panel/90 px-3 py-2 text-[12px] text-ink-muted shadow-lg shadow-black/40 backdrop-blur transition-colors hover:border-line-strong hover:text-ink"
-        >
-          <Search size={13} />
-          Search
-          <kbd className="rounded border border-line bg-inset px-1.5 py-0.5 font-mono text-[10px]">
-            ⌘K
-          </kbd>
-        </button>
+          </main>
+        </div>
 
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       </div>
+      </RangeContext.Provider>
     </LiveContext.Provider>
   );
 }

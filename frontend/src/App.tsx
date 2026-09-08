@@ -56,20 +56,23 @@ export default function App() {
         </Routes>
       </BrowserRouter>
 
-      {/* Toasts sit bottom-left: top-right is where the eye already is for page
-          actions, and a page landing under the cursor is a misclick waiting to
-          happen. Colour comes from the status palette, same as everywhere else. */}
+      {/* Bottom-right. Bottom-left sat on the sidebar's footer and top-right
+          landed on the fleet's own summary tiles and filter controls — a toast
+          that covers the thing it is telling you about is worse than no toast.
+          Colour comes from the status palette, same as everywhere else. */}
       <Toaster
-        position="bottom-left"
+        position="bottom-right"
         theme="dark"
         closeButton
         toastOptions={{
+          // Tokens rather than literals: toasts only ever appear inside the
+          // console, and the console re-tints these variables.
           style: {
-            background: '#16161b',
-            border: '1px solid #2b2b34',
-            color: '#ececf0',
+            background: 'var(--color-elevated)',
+            border: '1px solid var(--color-line-strong)',
+            color: 'var(--color-ink)',
             fontSize: '13px',
-            borderRadius: '8px',
+            borderRadius: '10px',
           },
         }}
       />

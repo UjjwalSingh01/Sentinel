@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
 import { motion } from 'motion/react';
-import { ArrowLeft, ShieldCheck, Terminal } from 'lucide-react';
+import { ShieldCheck, Terminal } from 'lucide-react';
 import { GET_INCIDENTS, GET_METRICS } from '@/graphql/queries';
 import { MetricChart } from '@/components/server/MetricChart';
-import { TimeRangeSelector, getTimeRange } from '@/components/server/TimeRangeSelector';
+import { useRange, windowFor } from '@/lib/range';
 import { IncidentDetailDialog } from '@/components/incidents/IncidentDetailDialog';
-import { Button, EmptyState, Skeleton, StatusBadge } from '@/components/ui';
+import { EmptyState, Skeleton, StatusBadge } from '@/components/ui';
 import { METRICS, type MetricKey, levelForSeverity, levelForIncidentStatus } from '@/lib/status';
 import { fadeUp, stagger } from '@/lib/motion';
 import { formatDateTime, timeAgo } from '@/lib/format';
@@ -16,8 +16,9 @@ const KEYS: MetricKey[] = ['cpu', 'memory', 'disk', 'latencyMs'];
 
 export function ServerDetailPage() {
   const { serverId } = useParams<{ serverId: string }>();
-  const navigate = useNavigate();
-  const [range, setRange] = useState('15m');
+  // The window comes from the top bar, so changing it once re-scopes every
+  // page that plots time — this one included.
+  const { range } = useRange();
   const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
 
   // The query window has to be pinned to a value that only changes on a tick.
@@ -31,7 +32,7 @@ export function ServerDetailPage() {
   }, []);
 
   const { fromTime, toTime, bucketMinutes } = useMemo(() => {
-    const { from, bucketMinutes: bucket } = getTimeRange(range, tick);
+    const { from, bucketMinutes: bucket } = windowFor(range, tick);
     return {
       fromTime: from.toISOString(),
       toTime: new Date(tick).toISOString(),
@@ -53,36 +54,17 @@ export function ServerDetailPage() {
   const incidents: any[] = (incidentsData as any)?.incidents ?? [];
 
   return (
-    <div className="p-6">
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            icon={ArrowLeft}
-            onClick={() => navigate('/')}
-            className="px-2"
-            aria-label="Back to overview"
-          />
-          <div>
-            <h1 className="font-mono text-[19px] leading-tight font-semibold tracking-[-0.01em] text-ink">
-              {serverId}
-            </h1>
-            <p className="mt-1 text-[13px] text-ink-muted">
-              Metric history and incidents for this host.
-            </p>
-          </div>
-        </div>
-        <TimeRangeSelector selected={range} onChange={setRange} />
-      </div>
-
+    <div className="p-4">
+      {/* No page header: the top bar already says Fleet › this-host, and owns
+          the time range that this page's queries read. */}
       {loading && metrics.length === 0 ? (
-        <div className="mb-5 grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div className="mb-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
           {KEYS.map((k) => (
             <Skeleton key={k} className="h-67" />
           ))}
         </div>
       ) : metrics.length === 0 ? (
-        <div className="panel mb-5">
+        <div className="panel mb-3">
           <EmptyState
             icon={Terminal}
             title="No metrics in this window"
@@ -94,7 +76,7 @@ export function ServerDetailPage() {
           variants={stagger(0.05)}
           initial="hidden"
           animate="show"
-          className="mb-5 grid grid-cols-1 gap-4 xl:grid-cols-2"
+          className="mb-3 grid grid-cols-1 gap-3 xl:grid-cols-2"
         >
           {KEYS.map((key) => (
             <motion.div key={key} variants={fadeUp}>

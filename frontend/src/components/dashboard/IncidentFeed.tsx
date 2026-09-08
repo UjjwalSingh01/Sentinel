@@ -56,40 +56,45 @@ export function IncidentFeed({ incidents, onIncidentClick, freshIds }: IncidentF
               exit={{ opacity: 0, x: 8, height: 0, marginBottom: 0 }}
               transition={snappy}
               onClick={() => onIncidentClick(incident.id)}
-              className={`w-full rounded-md border border-transparent p-2.5 text-left transition-colors duration-150 hover:border-line hover:bg-elevated ${
+              className={`w-full rounded-md border border-transparent px-2 py-1.5 text-left transition-colors duration-150 hover:border-line hover:bg-row ${
                 !reduced && freshIds.has(incident.id) ? 'flash-in' : ''
               }`}
             >
-              <div className="flex items-start gap-2.5">
+              {/* Compact by design: host, age, one line of message. The
+                  severity is already carried by the icon's colour and the
+                  status by its own pill, so spelling both out in words below
+                  the message — as this used to — was the same fact three
+                  times and doubled the height of every row. */}
+              <div className="flex items-start gap-2">
                 <Icon
-                  size={14}
-                  className="mt-0.5 shrink-0"
+                  size={13}
+                  className="mt-px shrink-0"
                   style={{ color: token.text }}
-                  aria-hidden
+                  aria-label={incident.severity}
                 />
 
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="truncate font-mono text-[12px] font-medium text-ink">
+                    <span className="truncate font-mono text-[11.5px] font-medium text-ink">
                       {incident.serverId}
                     </span>
+                    {incident.status !== 'open' && (
+                      <StatusBadge
+                        level={levelForIncidentStatus(incident.status)}
+                        showIcon={false}
+                        className="shrink-0 px-1 py-0 text-[9.5px]"
+                      >
+                        {incident.status === 'acknowledged' ? 'ack' : incident.status}
+                      </StatusBadge>
+                    )}
                     <span className="ml-auto shrink-0 font-mono text-[10px] text-ink-subtle">
                       {timeAgo(incident.createdAt)}
                     </span>
                   </div>
 
-                  <p className="mt-1 line-clamp-2 text-[12px] leading-snug text-ink-muted">
+                  <p className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-ink-muted">
                     {incident.message}
                   </p>
-
-                  <div className="mt-2 flex items-center gap-1.5">
-                    <StatusBadge level={sev} showIcon={false}>
-                      {incident.severity}
-                    </StatusBadge>
-                    <StatusBadge level={levelForIncidentStatus(incident.status)} showIcon={false}>
-                      {incident.status}
-                    </StatusBadge>
-                  </div>
                 </div>
               </div>
             </motion.button>

@@ -10,12 +10,19 @@ export interface LiveState {
   revision: number;
   /** Unresolved incidents, for the sidebar badge. */
   openIncidents: number;
+  /**
+   * Manual refresh from the top bar. It bumps `revision`, which every page
+   * already watches — so one control refreshes whatever screen you are on
+   * without each page needing its own button.
+   */
+  refresh: () => void;
 }
 
 export const LiveContext = createContext<LiveState>({
   connected: false,
   revision: 0,
   openIncidents: 0,
+  refresh: () => {},
 });
 
 export function useLive(): LiveState {
