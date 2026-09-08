@@ -6,6 +6,8 @@ import { isAuthenticated } from '@/lib/auth';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { LandingPage } from '@/pages/LandingPage';
 import { LoginPage } from '@/pages/LoginPage';
+import { PrivacyPage } from '@/pages/legal/PrivacyPage';
+import { TermsPage } from '@/pages/legal/TermsPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { ServerDetailPage } from '@/pages/ServerDetailPage';
 import { IncidentsPage } from '@/pages/IncidentsPage';
@@ -30,6 +32,10 @@ export default function App() {
         <Routes>
           <Route path="/welcome" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
+          {/* Public on purpose: someone must be able to read what they are
+              agreeing to before they have an account. */}
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/terms" element={<TermsPage />} />
           <Route
             element={
               <ProtectedRoute>

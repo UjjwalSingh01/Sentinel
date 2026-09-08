@@ -1,9 +1,10 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { AlertCircle, ArrowRight, Shield } from 'lucide-react';
 import { login } from '@/lib/auth';
 import { Button } from '@/components/ui';
+import { copyright } from '@/lib/legal';
 import { stagger } from '@/lib/motion';
 
 const item = {
@@ -140,6 +141,29 @@ export function LoginPage() {
         <motion.p variants={item} className="mt-5 text-center font-mono text-[11px] text-ink-subtle">
           admin@sentinel.io · sentinel123
         </motion.p>
+
+        {/* Signing in is the moment the terms start applying, so this is the
+            one place they have to be reachable without hunting for them. */}
+        <motion.div
+          variants={item}
+          className="mt-7 space-y-1.5 text-center font-mono text-[10.5px] text-ink-subtle"
+        >
+          <p>
+            By signing in you accept our{' '}
+            <Link to="/terms" className="text-ink-muted underline underline-offset-2 hover:text-ink">
+              Terms
+            </Link>{' '}
+            and{' '}
+            <Link
+              to="/privacy"
+              className="text-ink-muted underline underline-offset-2 hover:text-ink"
+            >
+              Privacy Policy
+            </Link>
+            .
+          </p>
+          <p>{copyright()}</p>
+        </motion.div>
       </motion.div>
     </div>
   );

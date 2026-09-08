@@ -12,6 +12,7 @@ import { isAuthenticated } from '@/lib/auth';
 import { useFinePointer, useSpotlight } from '@/lib/pointer';
 import { cn } from '@/lib/utils';
 import { StatusBadge } from '@/components/ui';
+import { SiteFooter } from '@/components/layout/SiteFooter';
 import { Reticle } from '@/components/landing/Reticle';
 import { FleetLattice } from '@/components/landing/FleetLattice';
 import { SignalPipeline } from '@/components/landing/SignalPipeline';
@@ -90,12 +91,7 @@ export function LandingPage() {
         <CallToAction authed={authed} />
       </main>
 
-      <footer className="border-t border-line px-6 py-8">
-        <div className="mx-auto flex max-w-6xl flex-col gap-2 font-mono text-[11px] text-ink-subtle sm:flex-row sm:items-center sm:justify-between">
-          <span>Sentinel · observability &amp; incident response</span>
-          <span>FastAPI · TimescaleDB · Redpanda · React</span>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }
