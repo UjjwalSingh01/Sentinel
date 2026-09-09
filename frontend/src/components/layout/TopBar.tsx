@@ -59,7 +59,7 @@ export function TopBar({ onOpenSearch }: { onOpenSearch: () => void }) {
     <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center gap-3 border-b border-line bg-panel/85 px-4 backdrop-blur-xl">
       {/* Location. A breadcrumb rather than a title, so drilling into a host
           keeps the trail back to the fleet visible. */}
-      <nav className="flex min-w-0 items-center gap-1.5 text-[13px]" aria-label="Breadcrumb">
+      <nav className="flex min-w-0 items-center gap-1.5 text-[13.5px]" aria-label="Breadcrumb">
         {isServer ? (
           <>
             <Link
@@ -69,10 +69,10 @@ export function TopBar({ onOpenSearch }: { onOpenSearch: () => void }) {
               Fleet
             </Link>
             <ChevronRight size={13} className="shrink-0 text-ink-subtle" />
-            <span className="truncate font-mono font-medium text-ink">{serverId}</span>
+            <span className="truncate font-mono font-semibold text-ink">{serverId}</span>
           </>
         ) : (
-          <span className="font-medium text-ink">{TITLES[path] ?? 'Sentinel'}</span>
+          <span className="font-semibold tracking-[-0.01em] text-ink">{TITLES[path] ?? 'Sentinel'}</span>
         )}
       </nav>
 

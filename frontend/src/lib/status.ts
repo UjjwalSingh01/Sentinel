@@ -79,15 +79,15 @@ export const LEVEL: Record<Level, LevelToken> = {
 
 /** The one hue every time-series and sparkline is drawn in.
  *
- *  #6DA5C0 from the console palette. It is deliberately NOT the teal accent:
- *  teal is chrome now, and a plotted line must never be mistakable for a
- *  control. Kept as a literal rather than var(--color-series) because these
- *  values reach SVG *presentation attributes*, where var() substitution is
- *  well supported in current Chrome but degrades to a black stroke anywhere it
- *  is not — a silent, ugly failure for the sake of an indirection that only
- *  console components ever read. CSS-side consumers use the token instead. */
-export const SERIES = '#6da5c0';
-export const SERIES_TEXT = '#8fbfd6';
+ *  Blue, deliberately NOT the indigo accent: indigo means "you can interact
+ *  with this", and a plotted line must never be mistakable for a control.
+ *  Kept as a literal rather than var(--color-series) because these values reach
+ *  SVG *presentation attributes*, where var() substitution works in current
+ *  Chrome but degrades to a black stroke anywhere it does not — a silent, ugly
+ *  failure for the sake of an indirection only console components read.
+ *  CSS-side consumers use the token instead. */
+export const SERIES = '#60a5fa';
+export const SERIES_TEXT = '#93c5fd';
 
 /* --- Metric thresholds --------------------------------------------------- */
 

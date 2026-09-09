@@ -13,6 +13,9 @@ export interface FeedIncident {
   message: string;
   status: string;
   createdAt: string;
+  /** Set when this incident was folded into another one. Callers exclude these
+   *  so a single real-world problem is counted once. */
+  parentIncidentId?: string | null;
 }
 
 interface IncidentFeedProps {

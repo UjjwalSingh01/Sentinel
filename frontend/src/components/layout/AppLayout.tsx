@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
 import { AnimatePresence, motion } from 'motion/react';
@@ -12,6 +12,9 @@ import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { CommandPalette } from './CommandPalette';
 
+/** Shared with DashboardPage so both count open incidents from the same slice. */
+export const INCIDENT_LIMIT = 200;
+
 export function AppLayout() {
   const location = useLocation();
   const [connected, setConnected] = useState(false);
@@ -22,7 +25,9 @@ export function AppLayout() {
   // The sidebar badge needs a fleet-wide open count regardless of which page
   // you're on, so the count is owned here rather than by any one page.
   const { data, refetch } = useQuery(GET_INCIDENTS, {
-    variables: { limit: 100 },
+    // Same ceiling the overview's feed uses, so the badge and the panel are
+    // counting from the same set rather than reporting two different totals.
+    variables: { limit: INCIDENT_LIMIT },
     pollInterval: 15000,
   });
 
@@ -55,10 +60,27 @@ export function AppLayout() {
     refetch();
   }, [refetch]);
 
+  /* The live stream is opened once, on mount, and never torn down until the
+     console unmounts.
+
+     It used to depend on the two handler callbacks, which in turn depend on
+     Apollo's `refetch`. That identity is not guaranteed to be stable across
+     renders, so every poll could tear the EventSource down and build a new
+     one: the connection flapped, and the indicator sat on OFFLINE while events
+     were visibly still arriving. Holding the handlers in a ref keeps the
+     effect's dependency list genuinely empty while still calling whatever the
+     latest render produced. */
+  const handlersRef = useRef({ handleNewIncident, handleIncidentUpdated });
+  // Updated after every commit rather than during render: writing to a ref
+  // mid-render is not safe under concurrent rendering.
+  useEffect(() => {
+    handlersRef.current = { handleNewIncident, handleIncidentUpdated };
+  });
+
   useEffect(() => {
     connectSSE({
-      onNewIncident: handleNewIncident,
-      onIncidentUpdated: handleIncidentUpdated,
+      onNewIncident: (raw) => handlersRef.current.handleNewIncident(raw),
+      onIncidentUpdated: () => handlersRef.current.handleIncidentUpdated(),
       onConnected: () => setConnected(true),
       onError: () => setConnected(false),
     });
@@ -66,7 +88,7 @@ export function AppLayout() {
       disconnectSSE();
       setConnected(false);
     };
-  }, [handleNewIncident, handleIncidentUpdated]);
+  }, []);
 
   /* The console runs on its own palette. The flag goes on <html> rather than a
      wrapper element so that the modals and the command palette — which render

@@ -4,10 +4,13 @@ import { ServerOff } from 'lucide-react';
 import { GET_INCIDENTS, GET_SERVERS } from '@/graphql/queries';
 import { FleetTable, type FleetRow } from '@/components/dashboard/FleetTable';
 import { IncidentFeed, type FeedIncident } from '@/components/dashboard/IncidentFeed';
+import { IncidentVolume } from '@/components/dashboard/IncidentVolume';
 import { IncidentDetailDialog } from '@/components/incidents/IncidentDetailDialog';
 import { EmptyState, Skeleton } from '@/components/ui';
 import { LEVEL, levelForServer, levelForSeverity, type Level } from '@/lib/status';
 import { useLive } from '@/lib/live';
+import { INCIDENT_LIMIT } from '@/components/layout/AppLayout';
+import { useRange } from '@/lib/range';
 import { cn } from '@/lib/utils';
 
 interface ServerData {
@@ -34,6 +37,7 @@ const worst = (a: Level, b: Level): Level => (RANK[a] >= RANK[b] ? a : b);
 export function DashboardPage() {
   const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
   const { revision } = useLive();
+  const { range } = useRange();
 
   const { data: serversData, loading: serversLoading, refetch: refetchServers } = useQuery(
     GET_SERVERS,
@@ -42,7 +46,9 @@ export function DashboardPage() {
 
   const { data: incidentsData, loading: incidentsLoading, refetch: refetchIncidents } = useQuery(
     GET_INCIDENTS,
-    { variables: { limit: 50 }, pollInterval: 10000 },
+    // A wider window than the feed needs, because the volume chart is built
+    // from the same rows.
+    { variables: { limit: INCIDENT_LIMIT }, pollInterval: 10000 },
   );
 
   // An incident pushed over SSE — or the top bar's refresh — should land now,
@@ -111,10 +117,18 @@ export function DashboardPage() {
     return () => clearTimeout(t);
   }, [incidents]);
 
+  /* Open, and not a child of another incident. The sidebar badge and the
+     Incidents page both fold children into their parent, so counting them here
+     was the reason this panel said 200 while the nav said 94 — the same
+     question with two different answers, which is exactly the kind of thing
+     that stops you trusting a dashboard. */
   const openIncidents = useMemo(
-    () => incidents.filter((i) => i.status !== 'resolved'),
+    () => incidents.filter((i) => i.status !== 'resolved' && !i.parentIncidentId),
     [incidents],
   );
+
+  /** True when the query hit its ceiling, so the count is a floor, not a total. */
+  const countIsPartial = incidents.length >= INCIDENT_LIMIT;
 
   /* --- Fleet rows --------------------------------------------------------
      A host's status is the worse of two things: what its metrics say right
@@ -169,18 +183,23 @@ export function DashboardPage() {
   const loadingFleet = serversLoading && servers.length === 0;
 
   return (
-    <div className="flex h-[calc(100vh-3rem)] flex-col gap-3 p-4">
-      {/* One strip, four numbers, and they now agree with the table underneath
-          because both are computed from the same combined health. */}
-      <div className="grid shrink-0 grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-4">
-        <Tile label="Hosts" value={fleet.total} />
-        <Tile label="Healthy" value={fleet.healthy} level="good" />
-        <Tile label="Degraded" value={fleet.degraded} level="warn" />
-        <Tile label="Critical" value={fleet.critical} level="critical" />
+    <div className="flex h-[calc(100vh-3rem)] flex-col gap-4 p-5">
+      <div className="grid shrink-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+        {/* Four numbers, at a size you can read from across a room. They agree
+            with the table below because both come from the same combined
+            health calculation. */}
+        <div className="grid grid-cols-4 gap-px overflow-hidden rounded-lg border border-line bg-line">
+          <Tile label="Hosts" value={fleet.total} />
+          <Tile label="Healthy" value={fleet.healthy} level="good" />
+          <Tile label="Degraded" value={fleet.degraded} level="warn" />
+          <Tile label="Critical" value={fleet.critical} level="critical" />
+        </div>
+
+        <IncidentVolume incidents={incidents} range={range} now={now} />
       </div>
 
-      <div className="flex min-h-0 flex-1 gap-3">
-        <section className="min-w-0 flex-1 overflow-y-auto" aria-label="Fleet">
+      <div className="flex min-h-0 flex-1 gap-4">
+        <section className="flex min-w-0 flex-1 flex-col overflow-y-auto" aria-label="Fleet">
           {loadingFleet ? (
             <Skeleton className="h-64" />
           ) : rows.length === 0 ? (
@@ -196,13 +215,14 @@ export function DashboardPage() {
           )}
         </section>
 
-        <aside className="flex w-80 shrink-0 flex-col overflow-hidden rounded-lg border border-line bg-card">
-          <header className="flex items-center gap-2 border-b border-line bg-inset/60 px-3 py-1.5">
-            <h2 className="text-[11px] font-medium tracking-wider text-ink-subtle uppercase">
+        <aside className="flex w-84 shrink-0 flex-col overflow-hidden rounded-lg border border-line bg-card">
+          <header className="flex items-center gap-2 border-b border-line px-3.5 py-2.5">
+            <h2 className="text-[11px] font-medium tracking-[0.08em] text-ink-subtle uppercase">
               Active incidents
             </h2>
-            <span className="ml-auto font-mono text-[11px] text-ink tabular-nums">
+            <span className="ml-auto font-mono text-[12px] font-medium text-ink tabular-nums">
               {openIncidents.length}
+              {countIsPartial && '+'}
             </span>
           </header>
 
@@ -237,20 +257,22 @@ export function DashboardPage() {
 function Tile({ label, value, level = 'neutral' }: { label: string; value: number; level?: Level }) {
   const active = value > 0 && level !== 'neutral' && level !== 'good';
   return (
-    <div className="flex items-baseline gap-2.5 bg-card px-3.5 py-2">
-      <span
-        className={cn('font-mono text-[18px] leading-none font-medium tabular-nums')}
-        style={{ color: active ? LEVEL[level].text : 'var(--color-ink)' }}
-      >
-        {value}
-      </span>
-      <span className="text-[11px] text-ink-muted">{label}</span>
+    <div className="relative bg-card px-4 py-3.5">
       {active && (
         <span
-          className="ml-auto block h-1.5 w-1.5 rounded-full"
+          className="absolute inset-y-0 left-0 w-0.5"
           style={{ background: LEVEL[level].mark }}
         />
       )}
+      <div className="flex items-center gap-1.5 text-[10.5px] font-medium tracking-[0.08em] text-ink-subtle uppercase">
+        {label}
+      </div>
+      <div
+        className={cn('mt-1.5 text-[30px] leading-none font-semibold tracking-[-0.03em] tabular-nums')}
+        style={{ color: active ? LEVEL[level].text : 'var(--color-ink)' }}
+      >
+        {value}
+      </div>
     </div>
   );
 }

@@ -72,10 +72,13 @@ export function FleetTable({ rows }: { rows: FleetRow[] }) {
     setSort((s) => (s.key === key ? { key, desc: !s.desc } : { key, desc: true }));
 
   return (
-    <div className="overflow-hidden rounded-lg border border-line bg-card">
+    /* h-full with the rows top-aligned: on a fleet of seven the leftover space
+       sits inside the panel, which reads as a table with room to grow rather
+       than a short card floating on an empty page. */
+    <div className="h-full overflow-hidden rounded-lg border border-line bg-card">
       <table className="w-full">
         <thead>
-          <tr className="border-b border-line bg-inset/60">
+          <tr className="border-b border-line">
             <th className="w-8" />
             {COLUMNS.map((c) => {
               const active = sort.key === c.key;
@@ -83,7 +86,7 @@ export function FleetTable({ rows }: { rows: FleetRow[] }) {
                 <th
                   key={c.key}
                   className={cn(
-                    'px-3 py-1.5 text-[10px] font-medium tracking-wider whitespace-nowrap uppercase',
+                    'px-3 py-2.5 text-[10.5px] font-medium tracking-[0.08em] whitespace-nowrap uppercase',
                     c.align === 'right' ? 'text-right' : 'text-left',
                     c.width,
                   )}
@@ -102,7 +105,7 @@ export function FleetTable({ rows }: { rows: FleetRow[] }) {
                 </th>
               );
             })}
-            <th className="w-32 px-3 py-1.5 text-left text-[10px] font-medium tracking-wider text-ink-subtle uppercase">
+            <th className="w-32 px-3 py-2.5 text-left text-[10.5px] font-medium tracking-[0.08em] text-ink-subtle uppercase">
               CPU trend
             </th>
             <th className="w-8" />
@@ -135,7 +138,7 @@ export function FleetTable({ rows }: { rows: FleetRow[] }) {
                   />
                 </td>
 
-                <td className="px-3 py-2 font-mono text-[12.5px] whitespace-nowrap text-ink">
+                <td className="px-3 py-2.5 font-mono text-[13px] font-medium whitespace-nowrap text-ink">
                   {row.serverId}
                 </td>
 
@@ -144,10 +147,10 @@ export function FleetTable({ rows }: { rows: FleetRow[] }) {
                 <MetricCell value={row.disk} spec="disk" />
                 <MetricCell value={row.latencyMs} spec="latencyMs" />
 
-                <td className="px-3 py-2 text-right">
+                <td className="px-3 py-2.5 text-right">
                   {row.alerts > 0 ? (
                     <span
-                      className="inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[11px] font-medium tabular-nums"
+                      className="inline-flex items-center rounded-md px-1.5 py-0.5 font-mono text-[11.5px] font-medium tabular-nums"
                       style={{
                         background: LEVEL[row.alertLevel].tint,
                         color: LEVEL[row.alertLevel].text,
@@ -203,14 +206,14 @@ function MetricCell({ value, spec }: { value: number; spec: keyof typeof METRICS
   const pct = Math.min((value / meta.max) * 100, 100);
 
   return (
-    <td className="px-3 py-2 text-right align-middle">
+    <td className="px-3 py-2.5 text-right align-middle">
       <div className="flex flex-col items-end gap-1">
         <span
-          className="font-mono text-[12px] tabular-nums"
-          style={{ color: level === 'good' ? 'var(--color-ink-muted)' : token.text }}
+          className="font-mono text-[13px] tabular-nums"
+          style={{ color: level === 'good' ? 'var(--color-ink)' : token.text }}
         >
           {value.toFixed(meta.unit === 'ms' ? 0 : 1)}
-          <span className="ml-0.5 text-[9px] text-ink-subtle">{meta.unit}</span>
+          <span className="ml-0.5 text-[9.5px] text-ink-subtle">{meta.unit}</span>
         </span>
         <span className="h-0.5 w-full max-w-16 overflow-hidden rounded-full bg-inset">
           <span
