@@ -16,6 +16,7 @@ from ..db.models import (
     AlertRule,
     Dashboard,
     Incident,
+    IncidentOccurrence,
     NotificationLogEntry,
     OnCallEntry,
     SavedFilter,
@@ -25,6 +26,7 @@ from ..services.redis_service import get_all_server_states
 from .types import (
     AlertRuleType,
     DashboardType,
+    IncidentOccurrenceType,
     IncidentType,
     LogConnection,
     LogType,
@@ -105,6 +107,8 @@ def _incident_to_type(
         parent_incident_id=inc.parent_incident_id,
         child_count=child_count,
         exemplar_trace_ids=list(inc.exemplar_trace_ids) if inc.exemplar_trace_ids else None,
+        occurrence_count=inc.occurrence_count or 0,
+        last_occurred_at=inc.last_occurred_at,
     )
 
 
@@ -415,6 +419,36 @@ class Query:
                     assignee = _user_to_type(u.scalar_one_or_none())
                 out.append(_incident_to_type(inc, assignee, 0))
             return out
+
+    @strawberry.field
+    async def incident_occurrences(
+        self, incident_id: str, limit: int = 100
+    ) -> list[IncidentOccurrenceType]:
+        """Recurrences collected under a claimed incident, newest first."""
+        limit = max(1, min(limit, 500))
+        async with async_session() as session:
+            result = await session.execute(
+                select(IncidentOccurrence)
+                .where(IncidentOccurrence.incident_id == incident_id)
+                .order_by(IncidentOccurrence.occurred_at.desc())
+                .limit(limit)
+            )
+            rows = result.scalars().all()
+            return [
+                IncidentOccurrenceType(
+                    id=o.id,
+                    incident_id=o.incident_id,
+                    server_id=o.server_id,
+                    severity=o.severity,
+                    current_value=o.current_value,
+                    threshold=o.threshold,
+                    message=o.message,
+                    log_context=json.dumps(o.log_context) if o.log_context else None,
+                    exemplar_trace_ids=list(o.exemplar_trace_ids) if o.exemplar_trace_ids else None,
+                    occurred_at=o.occurred_at,
+                )
+                for o in rows
+            ]
 
     @strawberry.field
     async def incident_traces(self, incident_id: str) -> list[TraceType]:

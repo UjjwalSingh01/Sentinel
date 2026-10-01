@@ -106,3 +106,28 @@ async def publish_alert(alert: FiredAlert, incident_id: str) -> None:
         severity=alert.severity.value,
         rule_id=alert.rule_id,
     )
+
+
+async def publish_occurrence(alert: FiredAlert, incident_id: str, occurrence_count: int) -> None:
+    """
+    Announce a recurrence on an already-claimed incident. Goes out on
+    `alerts:update` (a quiet refresh) rather than `alerts`, so it neither
+    toasts every console nor pages on-call a second time.
+    """
+    if _redis is None:
+        raise RuntimeError("Redis is not initialized")
+
+    payload = json.dumps({
+        "id": incident_id,
+        "server_id": alert.server_id,
+        "occurrence_count": occurrence_count,
+        "current_value": alert.current_value,
+    })
+
+    await _redis.publish("alerts:update", payload)
+    log.info(
+        "alerter.occurrence.published",
+        incident_id=incident_id,
+        server_id=alert.server_id,
+        occurrence_count=occurrence_count,
+    )

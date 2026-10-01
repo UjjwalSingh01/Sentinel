@@ -231,6 +231,41 @@ async def init_storage() -> None:
             ON notification_log (incident_id, sent_at DESC);
         """)
 
+        # Recurrences: once an incident is acknowledged or assigned, later
+        # firings of the same rule are collected here for the developer
+        # working it instead of opening (and broadcasting) a fresh incident.
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS occurrence_count INTEGER NOT NULL DEFAULT 0;
+        """)
+        await conn.execute("""
+            ALTER TABLE incidents
+            ADD COLUMN IF NOT EXISTS last_occurred_at TIMESTAMPTZ;
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_incidents_claimed
+            ON incidents (rule_id, server_id)
+            WHERE status <> 'resolved';
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS incident_occurrences (
+                id                  TEXT PRIMARY KEY,
+                incident_id         TEXT NOT NULL,
+                server_id           TEXT NOT NULL,
+                severity            TEXT NOT NULL,
+                current_value       DOUBLE PRECISION NOT NULL,
+                threshold           DOUBLE PRECISION NOT NULL,
+                message             TEXT NOT NULL,
+                log_context         JSONB,
+                exemplar_trace_ids  TEXT[],
+                occurred_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_incident_occurrences_incident
+            ON incident_occurrences (incident_id, occurred_at DESC);
+        """)
+
         # Create logs hypertable for log pipeline
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS logs (
@@ -377,6 +412,91 @@ async def find_parent_incident(
             dedup_fingerprint, rule_id,
         )
     return row["id"] if row else None
+
+
+async def find_claimed_incident(rule_id: str, server_id: str) -> Optional[str]:
+    """
+    Return the id of an unresolved, top-level incident for `rule_id` that
+    someone has taken ownership of (acknowledged or assigned) and that covers
+    `server_id` — either directly or through one of its dedup children.
+    None when nobody has claimed this problem yet.
+    """
+    if _pool is None:
+        raise RuntimeError("Storage pool is not initialized")
+
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT i.id FROM incidents i
+            WHERE i.rule_id = $1
+              AND i.parent_incident_id IS NULL
+              AND i.status <> 'resolved'
+              AND (i.status = 'acknowledged' OR i.assignee_id IS NOT NULL)
+              AND (
+                  i.server_id = $2
+                  OR EXISTS (
+                      SELECT 1 FROM incidents c
+                      WHERE c.parent_incident_id = i.id AND c.server_id = $2
+                  )
+              )
+            ORDER BY i.created_at DESC
+            LIMIT 1
+            """,
+            rule_id, server_id,
+        )
+    return row["id"] if row else None
+
+
+async def record_occurrence(
+    occurrence_id: str,
+    incident_id: str,
+    server_id: str,
+    severity: str,
+    current_value: float,
+    threshold: float,
+    message: str,
+    log_context: Optional[dict[str, Any]] = None,
+    exemplar_trace_ids: Optional[list[str]] = None,
+) -> int:
+    """
+    Store one recurrence against a claimed incident and bump its counter.
+    Returns the incident's new occurrence_count.
+    """
+    if _pool is None:
+        raise RuntimeError("Storage pool is not initialized")
+
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                INSERT INTO incident_occurrences
+                    (id, incident_id, server_id, severity, current_value, threshold,
+                     message, log_context, exemplar_trace_ids)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+                """,
+                occurrence_id, incident_id, server_id, severity, current_value, threshold,
+                message,
+                json.dumps(log_context) if log_context is not None else None,
+                exemplar_trace_ids,
+            )
+            count = await conn.fetchval(
+                """
+                UPDATE incidents
+                SET occurrence_count = occurrence_count + 1,
+                    last_occurred_at = NOW()
+                WHERE id = $1
+                RETURNING occurrence_count
+                """,
+                incident_id,
+            )
+    log.info(
+        "storage.incident.occurrence_recorded",
+        incident_id=incident_id,
+        server_id=server_id,
+        occurrence_count=count,
+        has_log_context=log_context is not None,
+    )
+    return int(count or 0)
 
 
 async def pick_exemplar_traces(

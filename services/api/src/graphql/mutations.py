@@ -514,4 +514,6 @@ async def _to_incident_type(inc: Incident, session: object) -> IncidentType:
         parent_incident_id=inc.parent_incident_id,
         child_count=0,
         exemplar_trace_ids=list(inc.exemplar_trace_ids) if inc.exemplar_trace_ids else None,
+        occurrence_count=inc.occurrence_count or 0,
+        last_occurred_at=inc.last_occurred_at,
     )

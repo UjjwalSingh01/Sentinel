@@ -23,6 +23,7 @@ from .alerter import (
     close_alerter,
     init_alerter,
     publish_alert,
+    publish_occurrence,
     set_cooldown,
     update_server_state,
 )
@@ -36,10 +37,12 @@ from .storage import (
     close_storage,
     create_incident,
     fetch_log_snapshot,
+    find_claimed_incident,
     find_parent_incident,
     init_storage,
     load_alert_rules,
     pick_exemplar_traces,
+    record_occurrence,
     seed_default_rules,
     write_metric,
 )
@@ -167,15 +170,6 @@ async def process_metrics() -> None:
                     if in_cooldown:
                         continue
 
-                    incident_id = str(uuid.uuid4())
-
-                    # Dedup: incidents on related servers (same role) firing
-                    # the same rule within 60s collapse under one parent.
-                    fingerprint, _group = compute_fingerprint(
-                        alert.rule_id, alert.server_id, timestamp,
-                    )
-                    parent_id = await find_parent_incident(alert.rule_id, fingerprint)
-
                     # Eager log snapshot: capture surrounding WARN/ERROR/FATAL
                     # logs into the incident row before the SSE fire-out.
                     log_context = await _build_log_context(
@@ -188,6 +182,36 @@ async def process_metrics() -> None:
                         server_id=alert.server_id,
                         anchor=timestamp,
                     )
+
+                    # Someone already owns this problem (acknowledged or
+                    # assigned): file the firing under their incident as an
+                    # occurrence for them to review, instead of opening a new
+                    # incident that toasts every console and pages again.
+                    claimed_id = await find_claimed_incident(alert.rule_id, alert.server_id)
+                    if claimed_id is not None:
+                        count = await record_occurrence(
+                            occurrence_id=str(uuid.uuid4()),
+                            incident_id=claimed_id,
+                            server_id=alert.server_id,
+                            severity=alert.severity.value,
+                            current_value=alert.current_value,
+                            threshold=alert.threshold,
+                            message=alert.message,
+                            log_context=log_context,
+                            exemplar_trace_ids=exemplars or None,
+                        )
+                        await publish_occurrence(alert, claimed_id, count)
+                        await set_cooldown(alert.server_id, cooldown_key)
+                        continue
+
+                    incident_id = str(uuid.uuid4())
+
+                    # Dedup: incidents on related servers (same role) firing
+                    # the same rule within 60s collapse under one parent.
+                    fingerprint, _group = compute_fingerprint(
+                        alert.rule_id, alert.server_id, timestamp,
+                    )
+                    parent_id = await find_parent_incident(alert.rule_id, fingerprint)
 
                     await create_incident(
                         incident_id=incident_id,

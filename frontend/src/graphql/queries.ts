@@ -44,6 +44,7 @@ export const GET_INCIDENTS = gql`
       }
       createdAt
       acknowledgedAt
+      acknowledgedBy
       resolvedAt
       logContext
       ruleId
@@ -51,6 +52,8 @@ export const GET_INCIDENTS = gql`
       parentIncidentId
       childCount
       exemplarTraceIds
+      occurrenceCount
+      lastOccurredAt
     }
   }
 `;
@@ -75,6 +78,7 @@ export const GET_INCIDENT = gql`
       }
       createdAt
       acknowledgedAt
+      acknowledgedBy
       resolvedAt
       logContext
       ruleId
@@ -82,6 +86,24 @@ export const GET_INCIDENT = gql`
       parentIncidentId
       childCount
       exemplarTraceIds
+      occurrenceCount
+      lastOccurredAt
+    }
+  }
+`;
+
+export const GET_INCIDENT_OCCURRENCES = gql`
+  query GetIncidentOccurrences($incidentId: String!, $limit: Int) {
+    incidentOccurrences(incidentId: $incidentId, limit: $limit) {
+      id
+      serverId
+      severity
+      currentValue
+      threshold
+      message
+      logContext
+      exemplarTraceIds
+      occurredAt
     }
   }
 `;

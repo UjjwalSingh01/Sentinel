@@ -70,6 +70,26 @@ class IncidentType:
     parent_incident_id: Optional[str] = None
     child_count: int = 0
     exemplar_trace_ids: Optional[list[str]] = None
+    # Recurrences collected after the incident was acknowledged/assigned.
+    occurrence_count: int = 0
+    last_occurred_at: Optional[datetime] = None
+
+
+@strawberry.type
+class IncidentOccurrenceType:
+    """One recurrence of a claimed incident, kept for the developer working it."""
+
+    id: str
+    incident_id: str
+    server_id: str
+    severity: str
+    current_value: float
+    threshold: float
+    message: str
+    # JSON-encoded log snapshot around this firing; null if none captured.
+    log_context: Optional[str] = None
+    exemplar_trace_ids: Optional[list[str]] = None
+    occurred_at: datetime
 
 
 @strawberry.type

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Layers, ShieldCheck } from 'lucide-react';
+import { Layers, Repeat, ShieldCheck } from 'lucide-react';
 import { GET_INCIDENTS } from '@/graphql/queries';
 import { IncidentDetailDialog } from '@/components/incidents/IncidentDetailDialog';
 import { SavedFilterBar } from '@/components/filters/SavedFilterBar';
@@ -17,17 +17,25 @@ import { levelForIncidentStatus, levelForSeverity } from '@/lib/status';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import { snappy } from '@/lib/motion';
 import { useLive } from '@/lib/live';
+import { getUser } from '@/lib/auth';
 
-type Status = 'all' | 'open' | 'acknowledged' | 'resolved';
+type Status = 'all' | 'mine' | 'open' | 'acknowledged' | 'resolved';
+
+/** Unresolved incidents this user has taken on, by assignment or by acking. */
+function isMine(inc: { status: string; assigneeId?: string | null; acknowledgedBy?: string | null }, me?: string) {
+  if (!me || inc.status === 'resolved') return false;
+  return inc.assigneeId === me || inc.acknowledgedBy === me;
+}
 
 export function IncidentsPage() {
   const [params] = useSearchParams();
   const [status, setStatus] = useState<Status>((params.get('status') as Status) || 'all');
   const [selected, setSelected] = useState<string | null>(null);
   const { revision } = useLive();
+  const me = getUser()?.user_id;
 
   const { data, loading, refetch } = useQuery(GET_INCIDENTS, {
-    variables: { status: status === 'all' ? undefined : status, limit: 100 },
+    variables: { status: status === 'all' || status === 'mine' ? undefined : status, limit: 100 },
     pollInterval: 10000,
   });
 
@@ -39,10 +47,18 @@ export function IncidentsPage() {
 
   // Children are folded into their parent's "+N related" pill, so showing them
   // as their own rows would double-count one real-world problem.
-  const rows = useMemo(() => incidents.filter((i) => !i.parentIncidentId), [incidents]);
+  const topLevel = useMemo(() => incidents.filter((i) => !i.parentIncidentId), [incidents]);
+  const rows = useMemo(
+    () => (status === 'mine' ? topLevel.filter((i) => isMine(i, me)) : topLevel),
+    [topLevel, status, me],
+  );
 
   const countFor = (s: Status) =>
-    s === 'all' ? rows.length : rows.filter((i) => i.status === s).length;
+    s === 'all'
+      ? topLevel.length
+      : s === 'mine'
+        ? topLevel.filter((i) => isMine(i, me)).length
+        : topLevel.filter((i) => i.status === s).length;
 
   return (
     <div className="p-4">
@@ -53,6 +69,7 @@ export function IncidentsPage() {
           onChange={setStatus}
           items={[
             { value: 'all', label: 'All', count: countFor('all') },
+            { value: 'mine', label: 'Assigned to me', count: countFor('mine') },
             { value: 'open', label: 'Open', count: countFor('open') },
             { value: 'acknowledged', label: 'Acknowledged', count: countFor('acknowledged') },
             { value: 'resolved', label: 'Resolved', count: countFor('resolved') },
@@ -81,7 +98,9 @@ export function IncidentsPage() {
             hint={
               status === 'all'
                 ? 'Nothing has breached a rule. The fleet is inside its thresholds.'
-                : `No ${status} incidents right now.`
+                : status === 'mine'
+                  ? 'Nothing is assigned to or acknowledged by you.'
+                  : `No ${status} incidents right now.`
             }
           />
         ) : (
@@ -133,6 +152,18 @@ export function IncidentsPage() {
                             <Chip className="shrink-0">
                               <Layers size={9} />+{inc.childCount}
                             </Chip>
+                          )}
+                          {inc.occurrenceCount > 0 && (
+                            <span
+                              className="shrink-0"
+                              title={`Recurred ${inc.occurrenceCount}× since it was claimed${
+                                inc.lastOccurredAt ? ` · last ${timeAgo(inc.lastOccurredAt)}` : ''
+                              }`}
+                            >
+                              <Chip>
+                                <Repeat size={9} />×{inc.occurrenceCount}
+                              </Chip>
+                            </span>
                           )}
                         </div>
                       </td>

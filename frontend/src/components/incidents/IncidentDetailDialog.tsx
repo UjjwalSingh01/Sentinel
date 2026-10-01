@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery } from '@apollo/client/react';
 import { AnimatePresence, motion } from 'motion/react';
@@ -7,6 +7,7 @@ import {
   ExternalLink,
   GitBranch,
   Layers,
+  Repeat,
   Sparkles,
   Terminal,
 } from 'lucide-react';
@@ -16,7 +17,7 @@ import {
   REQUEST_AI_ANALYSIS,
   RESOLVE_INCIDENT,
 } from '@/graphql/mutations';
-import { GET_INCIDENT, GET_USERS } from '@/graphql/queries';
+import { GET_INCIDENT, GET_INCIDENT_OCCURRENCES, GET_USERS } from '@/graphql/queries';
 import { GET_INCIDENT_CHILDREN } from '@/graphql/traces';
 import { getUser } from '@/lib/auth';
 import {
@@ -27,6 +28,7 @@ import {
   type Level,
 } from '@/lib/status';
 import { formatDateTime, timeAgo } from '@/lib/format';
+import { useLive } from '@/lib/live';
 import { Button, Skeleton, StatusBadge, Tabs } from '@/components/ui';
 import { Modal } from '@/components/ui/Modal';
 import { TracesPanel } from './TracesPanel';
@@ -36,11 +38,22 @@ interface IncidentDetailDialogProps {
   onClose: () => void;
 }
 
-type EvidenceTab = 'logs' | 'traces' | 'related';
+type EvidenceTab = 'logs' | 'traces' | 'related' | 'recurrences';
 
 interface LogContext {
   total_lines?: number;
   templates?: Array<{ template: string; count: number; level: string; samples?: string[] }>;
+}
+
+interface Occurrence {
+  id: string;
+  serverId: string;
+  severity: string;
+  currentValue: number;
+  threshold: number;
+  message: string;
+  logContext: string | null;
+  occurredAt: string;
 }
 
 export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDialogProps) {
@@ -56,6 +69,19 @@ export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDial
     variables: { parentId: incidentId },
     skip: !incidentId,
   });
+  const { data: occurrencesData, refetch: refetchOccurrences } = useQuery(
+    GET_INCIDENT_OCCURRENCES,
+    { variables: { incidentId, limit: 100 }, skip: !incidentId },
+  );
+
+  // Recurrences on a claimed incident arrive as quiet `incidentUpdated` events,
+  // so an open dialog keeps its counter and list current without a toast.
+  const { revision } = useLive();
+  useEffect(() => {
+    if (!incidentId || revision === 0) return;
+    refetch();
+    refetchOccurrences();
+  }, [revision, incidentId, refetch, refetchOccurrences]);
 
   const [acknowledgeIncident] = useMutation(ACKNOWLEDGE_INCIDENT);
   const [resolveIncident] = useMutation(RESOLVE_INCIDENT);
@@ -65,6 +91,8 @@ export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDial
   const incident = (data as any)?.incident;
   const users: { id: string; name: string; email: string }[] = (usersData as any)?.users ?? [];
   const children: any[] = (childrenData as any)?.incidentChildren ?? [];
+  const occurrences: Occurrence[] =
+    (occurrencesData as { incidentOccurrences?: Occurrence[] } | undefined)?.incidentOccurrences ?? [];
 
   const logContext = useMemo<LogContext | null>(() => {
     if (!incident?.logContext) return null;
@@ -93,6 +121,13 @@ export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDial
     timeline.push({ label: 'Fired', at: incident.createdAt, level: sev });
     if (incident.acknowledgedAt) {
       timeline.push({ label: 'Acknowledged', at: incident.acknowledgedAt, level: 'warn' });
+    }
+    if (incident.occurrenceCount > 0 && incident.lastOccurredAt) {
+      timeline.push({
+        label: `Recurred ×${incident.occurrenceCount}`,
+        at: incident.lastOccurredAt,
+        level: sev,
+      });
     }
     if (incident.resolvedAt) {
       timeline.push({ label: 'Resolved', at: incident.resolvedAt, level: 'good' });
@@ -242,6 +277,14 @@ export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDial
                 ...(incident.childCount > 0
                   ? [{ value: 'related' as const, label: 'Related', icon: Layers, count: incident.childCount }]
                   : []),
+                ...(incident.occurrenceCount > 0
+                  ? [{
+                      value: 'recurrences' as const,
+                      label: 'Recurrences',
+                      icon: Repeat,
+                      count: incident.occurrenceCount,
+                    }]
+                  : []),
               ]}
             />
 
@@ -312,6 +355,21 @@ export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDial
                     ) : (
                       <Muted>No related child incidents.</Muted>
                     ))}
+
+                  {tab === 'recurrences' &&
+                    (occurrences.length > 0 ? (
+                      <div className="space-y-1.5">
+                        <p className="text-[11px] text-ink-subtle">
+                          Fired again after this incident was claimed. Collected here
+                          instead of opening new incidents, so nobody else is re-alerted.
+                        </p>
+                        {occurrences.map((o) => (
+                          <OccurrenceRow key={o.id} occurrence={o} />
+                        ))}
+                      </div>
+                    ) : (
+                      <Muted>No recurrences collected yet.</Muted>
+                    ))}
                 </motion.div>
               </AnimatePresence>
             </div>
@@ -345,6 +403,51 @@ export function IncidentDetailDialog({ incidentId, onClose }: IncidentDetailDial
 }
 
 /* --- Local layout bits --------------------------------------------------- */
+
+function OccurrenceRow({ occurrence: o }: { occurrence: Occurrence }) {
+  const ctx = useMemo<LogContext | null>(() => {
+    if (!o.logContext) return null;
+    try {
+      return JSON.parse(o.logContext);
+    } catch {
+      return null;
+    }
+  }, [o.logContext]);
+  const level = levelForSeverity(o.severity);
+
+  return (
+    <div className="rounded-md border border-line bg-inset p-2.5">
+      <div className="flex items-center gap-2.5">
+        <span
+          className="shrink-0 font-mono text-[11px] text-ink-subtle"
+          title={formatDateTime(o.occurredAt)}
+        >
+          {timeAgo(o.occurredAt)}
+        </span>
+        <span className="shrink-0 font-mono text-[11px] text-ink">{o.serverId}</span>
+        <span className="font-mono text-[11px] tabular-nums" style={{ color: LEVEL[level].text }}>
+          {o.currentValue.toFixed(1)}
+        </span>
+        <span className="font-mono text-[10px] text-ink-subtle">/ {o.threshold}</span>
+        {ctx?.total_lines ? (
+          <span className="ml-auto shrink-0 font-mono text-[10px] text-ink-subtle">
+            {ctx.total_lines} log lines
+          </span>
+        ) : null}
+      </div>
+      {ctx?.templates?.slice(0, 3).map((t, i) => (
+        <div key={i} className="mt-1 flex items-start gap-2">
+          <StatusBadge level={levelForLogLevel(t.level)} showIcon={false}>
+            ×{t.count}
+          </StatusBadge>
+          <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-ink-muted" title={t.template}>
+            {t.template}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function Cell({ label, children }: { label: string; children: React.ReactNode }) {
   return (
