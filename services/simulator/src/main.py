@@ -45,7 +45,8 @@ LOG_INGEST_ENDPOINT: Final[str] = f"{LOG_INGESTION_URL}/api/logs"
 API_URL: Final[str] = os.getenv("API_URL", "http://api:8000")
 SPAN_INGEST_ENDPOINT: Final[str] = f"{API_URL}/api/spans"
 INTERVAL_SECONDS: Final[float] = 3.0
-SPIKE_PROBABILITY: Final[float] = 0.15  # 15% chance per tick per server to START a spike
+# Chance per tick per server to START a spike (i.e. the incident rate).
+SPIKE_PROBABILITY: Final[float] = float(os.getenv("SIMULATOR_SPIKE_PROBABILITY", "0.05"))
 
 # ---------------------------------------------------------------------------
 # Simulated servers

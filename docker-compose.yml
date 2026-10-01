@@ -213,6 +213,7 @@ services:
       INGESTION_URL: ${INGESTION_URL}
       LOG_INGESTION_URL: ${LOG_INGESTION_URL}
       LOG_LEVEL: ${LOG_LEVEL}
+      SIMULATOR_SPIKE_PROBABILITY: ${SIMULATOR_SPIKE_PROBABILITY:-0.05}
     depends_on:
       ingestion:
         condition: service_healthy
